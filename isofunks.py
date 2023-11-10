@@ -4,7 +4,6 @@ October 3, 2022
 IsoFATE functions
 '''
 
-import imports
 from constants import *
 from orbit_params import *
 import matplotlib.patches as patches
