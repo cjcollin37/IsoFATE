@@ -1,7 +1,7 @@
 '''
 Collin Cherubim
 October 3, 2022
-Main code for running IsoFATE calculation for binary mixture
+Main code for running IsoFATE calculation for ternary mixture
 '''
 
 from isofunks import *
