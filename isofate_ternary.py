@@ -124,7 +124,7 @@ beta = -1.23):
 
     # initial values
         M_atm = Mp*f_atm # initial atmospheric mass [kg]
-        mu_avg = mu_HHe # should be avg of H/D/He, need to check; small error expected
+        mu_avg = mu_HHe # average atomic mass ror H/He [kg]
         He0 = (1/13.6)*M_atm/mu_avg # initial He number [atoms]
         H0 = (12.6/13.6)*(1 - DtoH_solar)*M_atm/mu_avg # initial H number [atoms]
         D0 =(12.6/13.6)*DtoH_solar*M_atm/mu_avg # initial D number [atoms]
