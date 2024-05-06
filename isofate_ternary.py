@@ -20,7 +20,7 @@ beta = -1.23):
     Note: species 1 is H, species 2 is He, and species 3 is D.
 
     Inputs:
-     - f_atm: atmospheric mass fraction(s), must be in the form of an array [ndim]
+     - f_atm: initial atmospheric mass fraction(s); may be scalar or array for multiple simulations in one run [ndim]
      - Mp: planet mass [kg]
      - Mstar: stellar mass [kg]
      - F0: initial incident XUV flux [W/m2]
