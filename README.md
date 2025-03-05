@@ -4,6 +4,8 @@
 
 Isotopic Fractionation via ATmospheric Escape (IsoFATE) is a Python code that models mass fractionation resulting from diffusive separation in escaping planetary atmospheres and numerically computes atmospheric species abundance over time. The model is currently tuned to sub-Neptune sized planets with rocky cores of Earth-like bulk composition and primordial H/He atmospheres. F, G, K, and M type stellar fluxes are readily implemented. This code is not yet a Python package, so no installation is required. Simply download the source files to use.
 
+Version 1 can simulate a ternary mixture of H, He, and D (deuterium). Version 2 is coupled to the magma ocean-atmosphere equilibrium chemistry model Atmodeller.
+
 Author: Collin Cherubim
 
 ## Citation
