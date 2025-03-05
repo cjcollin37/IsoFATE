@@ -4,7 +4,7 @@ August 8, 2024
 Main IsoFATE script for coulped model.
 '''
 
-from isofunks_public import *
+from isofunks import *
 from atmodeller_coupler import *
 from atmodeller.interior_atmosphere import Planet
 from constants import *
