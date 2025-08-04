@@ -4,27 +4,35 @@ June 6, 2024
 IsoFATE+Atmodeller coupler functions
 '''
 
+import numpy.random
+
+# import matplotlib.patches as patches
+from scipy import special
+from scipy.interpolate import RegularGridInterpolator as RGI
+
+# atmodeller dependencies
+# from atmodeller import debug_logger
+# from atmodeller.constraints import (
+#     BufferedFugacityConstraint,
+#     ElementMassConstraint,
+#     FugacityConstraint,
+#     MassConstraint,
+#     SystemConstraints,
+# )
+# from atmodeller.core import GasSpecies, Species
+# from atmodeller.interior_atmosphere import InteriorAtmosphereSystem, Planet
+# from atmodeller.solubility.carbon_species import CO2_basalt_dixon
+# from atmodeller.solubility.hydrogen_species import H2O_peridotite_sossi
+# from atmodeller.thermodata.redox_buffers import IronWustiteBuffer
+# from atmodeller.utilities import earth_oceans_to_kg
+
 # import imports
 from constants import *
 from orbit_params import *
-import matplotlib.patches as patches
-from scipy import special
-from scipy.interpolate import RegularGridInterpolator as RGI
-import numpy.random
-
-# atmodeller dependencies
-from atmodeller import debug_logger
-from atmodeller.interior_atmosphere import InteriorAtmosphereSystem, Planet
-from atmodeller.core import GasSpecies, Species
-from atmodeller.constraints import FugacityConstraint, BufferedFugacityConstraint, SystemConstraints, MassConstraint, ElementMassConstraint
-from atmodeller.thermodata.redox_buffers import IronWustiteBuffer
-from atmodeller.utilities import earth_oceans_to_kg
-from atmodeller.solubility.carbon_species import CO2_basalt_dixon
-from atmodeller.solubility.hydrogen_species import H2O_peridotite_sossi
 
 # incident XUV flux
 
-def Fxuv(t, F0, t_sat = 5e8, beta = -1.23):
+def Fxuv(t, F0, t0 = 1e6, t_sat = 5e8, beta = -1.23, step_fn = False, F_final = 0, t_pms = 0, pms_factor = 1e2):
     '''
     Calculates incident XUV flux
     Adapted from Ribas et al 2005
@@ -32,16 +40,29 @@ def Fxuv(t, F0, t_sat = 5e8, beta = -1.23):
 
     Inputs:
         - t: time/age [s]
-        - F0: initial incident XUV flux [W/m2]
+        - F0: initial main sequence incident XUV flux [W/m2]
+        - t0: start time [yr]
         - t_sat: saturation time [yr]; change this for different stellar types (M1:500Myr, G:50Myr)
         - beta: exponential term [ndim]
+        - step_fn: True for step function from F0 to F_final [Bool]
+        - F_final: if step_fn == True, set the final XUV flux [W/m2]
+        - t_pms: pre-main sequence phase duration (power law decay) [yr]
+        - pms_factor: Fxuv_pms_0/Fxuv_sat; ~1e2 for mid-to-late M stars (Ramirez & Kaltenegger 2014) [ndim]
 
     Output: incident XUV flux [W/m2]
     '''
-    if t*s2yr < t_sat:
+    time = t*s2yr
+    if 0 < time < t_pms:
+        F_pms0 = F0*pms_factor
+        s = (np.log10(F0) - np.log10(F_pms0)) / (np.log10(t_pms) - np.log10(t0))
+        return F_pms0*(time/t0)**s
+    elif time < t_sat:
         return F0
     else:
-        return F0*(t*s2yr/t_sat)**beta
+        if step_fn == False:
+            return F0*(time/t_sat)**beta
+        elif step_fn == True:
+            return F_final
 
 def Fxuv_a(t, F0, t_sat = 5e8, beta = -1.23):
     '''
@@ -184,8 +205,8 @@ def Fxuv_hazmat(t, d, activity):
 
 # energy-limited total mass flux
 
-def phi_E(t, eps, Vpot, d, F0, t_sat = 5e8, beta = -1.23, activity = 'medium', 
-          flux_model = 'power law', stellar_type = 'M1'):
+def phi_E(t, eps, Vpot, d, F0, t0 = 1e6, t_sat = 5e8, beta = -1.23, activity = 'medium', 
+          flux_model = 'power law', stellar_type = 'M1', step_fn = False, F_final = 0, t_pms = 0, pms_factor = 1e2):
     '''
     Calculates energy-limited mass flux for XUV-friven hydrodynamic escape
     Adapted from Wordsworth et al. 2018
@@ -204,9 +225,9 @@ def phi_E(t, eps, Vpot, d, F0, t_sat = 5e8, beta = -1.23, activity = 'medium',
     Output: mass flux [kg/m2/s]
     '''
     if flux_model == 'power law':
-        return eps*Fxuv(t, F0, t_sat, beta)/(4*Vpot)
+        return eps*Fxuv(t, F0, t0, t_sat, beta, step_fn, F_final, t_pms, pms_factor)/(4*Vpot)
     elif flux_model == 'phoenix':
-        return eps*Fxuv_hazmat(t, d, activity = 'medium')/(4*Vpot)
+        return eps*Fxuv_hazmat(t, d, activity)/(4*Vpot)
     elif flux_model == 'Johnstone':
         return eps*Fxuv_Johnstone(t, d, stellar_type)
 
@@ -664,7 +685,7 @@ def make_atmosphere_descent(Tem, mu, rplanet, Mc, gamma, output_mode):
         Tsurf = T[0]
         psurf = p[0]
         return Tsurf,psurf
-    
+
 def rplanet_fn(Teq, mu, Mc, gamma, Matm):
     
     # here is function of the function
@@ -681,6 +702,29 @@ def rplanet_fn(Teq, mu, Mc, gamma, Matm):
     rplanet = optimize.fsolve(fun,rplanet_guess)
 
     return rplanet
+
+
+# For outlining colormap elements for completely stripped planets
+
+# def Patch(nan_array, periods, Mps, ax, color = 'darkviolet', lw = 1.2):
+#     '''
+#     For plotting. Outlines cells in red for which all atmosphere is lost.
+#     Input: nan_array must contain 2D array of fractionation values and == 1 for total loss.
+#     '''
+#     x_step = periods[1]*s2day - periods[0]*s2day
+#     y_step = Mps[1]/Me - Mps[0]/Me
+#     width = x_step
+#     height = y_step
+
+#     for j in range(len(nan_array)):
+#         for i in range(len(nan_array[j])):
+#             if nan_array[j, i] == 1:
+#                 x = periods[i]*s2day - x_step/2
+#                 y = Mps[j]/Me - y_step/2
+#                 patch = patches.Rectangle((x,y), width, height, facecolor = 'none', edgecolor = color, 
+#                                           linewidth = lw, zorder = 20)
+#                 ax.add_patch(patch)
+
 
 
 # Computes number of terrestrial oceans based on planet mass for setting lower bound on N_H to end simulation
@@ -808,7 +852,7 @@ def V_reduction(Mp, Ms, a, Rp):
     K = 1 - 3/2/zeta + 1/2/zeta**3
     return K
 
-def phi_RR(Rp, Mp, Teq, t, F0, t_sat):
+def phi_RR(Rp, Mp, Teq, t, F0, t0=1e6, t_sat=5e8, beta=-1.23, step_fn=False, F_final=0, t_pms=2e8, pms_factor=1e2):
     '''
     Radiation recombination-limited escape rate used in Lopez & Rice 2018 and others
     Prescription from Murray-Clay et al 2009, and used in Wordsworth et al 2018
@@ -821,7 +865,7 @@ def phi_RR(Rp, Mp, Teq, t, F0, t_sat):
      - t_sat: XUV saturation time [yr]
     Output: mass flux [kg/m2/s]
     '''
-    F = Fxuv(t, F0, t_sat)
+    F = Fxuv(t, F0, t0, t_sat, beta, step_fn, F_final, t_pms, pms_factor)
     g = G*Mp/Rp**2 # grav field strength at base of flow [m/s2]
     T = 1e4 # temp is thermostatted at 1e4 K by radiation [K]
     nu_0 = 4.835e15 # EUV ionizing radiation frequency (~60 nm/ 20 eV) [Hz]
@@ -1055,6 +1099,103 @@ def MeltFraction(Mp, T):
     interpolater = RGI(points = [mass_grid, temp_grid], values = psi_grid.transpose(), method = 'linear')
     return interpolater((Mp/Me, T))
 
+# def IsoFATE_Atmodeller_Sim(time_slices, f_atm, Mp, M_star, F0, Fp, Teq, d, mechanism, isofate_species, rad_evol,
+#         N_H, N_He, N_D, N_O, N_C,
+#         mu = mu_solar, eps = 0.15, activity = 'medium', flux_model = 'power law', stellar_type = 'M1', 
+#         Rp_override = False, t_sat = 5e8, f_atm_final = 'null', n_TO_final = 'null', 
+#         n_steps = int(1e5), t0 = 1e6, rho_rcb = 1.0, Johnson = False, RR = True, f_pred = False,
+#         thermal = True, H2O_reservoir = False, wmf = 0, beta = -1.23):
+    
+#     atm_solutions = {}
+#     all_solutions = {}
+#     isofate_masses = {}
+
+#     for i in range(len(time_slices)):
+
+#         ### ATMODELLER
+
+#         planet: Planet = Planet()
+
+#         k = 0.28
+#         T_surface = Teq*(P_surf(Mp, f_atm)/1e4)**k # Redo this with Robin's code
+#         surface_temperature: float = np.min([6000, T_surface]) # K
+#         mantle_melt_fraction: float = 0.9
+#         planet_mass: float = Mp
+#         surface_radius: float = R_core(Mp)
+
+#         planet = Planet(surface_temperature=surface_temperature, mantle_melt_fraction=mantle_melt_fraction, planet_mass = planet_mass, 
+#                         surface_radius = surface_radius, melt_composition='Basalt')
+
+#         H2O_g = GasSpecies("H2O", solubility=H2O_peridotite_sossi())
+#         H2_g = GasSpecies("H2")
+#         O2_g = GasSpecies("O2")
+#         CO_g = GasSpecies("CO")
+#         CO2_g = GasSpecies("CO2", solubility=CO2_basalt_dixon())
+#         CH4_g = GasSpecies("CH4")
+
+#         species = Species([H2O_g, H2_g, O2_g, CO_g, CO2_g, CH4_g])
+#         interior_atmosphere: InteriorAtmosphereSystem = InteriorAtmosphereSystem(species=species, planet=planet)
+
+#         # number_of_earth_oceans: float = 10
+#         # ch_ratio: float = 1 # C/H ratio by mass
+
+#         mass_H: float = N_H*mu_H
+#         mass_He: float = N_He*mu_He
+#         mass_D: float = N_D*mu_D
+#         mass_O: float = N_O*mu_O
+#         mass_C: float = N_C*mu_C
+
+#         constraints: SystemConstraints = SystemConstraints([
+#             ElementMassConstraint('O', mass_O),
+#             ElementMassConstraint('C', mass_C), ElementMassConstraint('H', mass_H + mass_D)
+#         ])
+#         #BufferedFugacityConstraint(O2_g, IronWustiteBuffer())
+
+#         # run atmodeller
+#         interior_atmosphere: InteriorAtmosphereSystem = InteriorAtmosphereSystem(species=species, planet=planet)
+#         interior_atmosphere.solve(constraints)
+#         interior_atmosphere.solution_dict()
+        
+#         # save output
+#         atm_solutions[str(time_slices[i]*s2yr)] = interior_atmosphere.solution_dict()
+#         all_solutions[str(time_slices[i]*s2yr)] = interior_atmosphere.output()
+#         isofate_masses[str(time_slices[i]*s2yr)] = {'H_totals': mass_H, 'He_totals': mass_He, 'D_totals': mass_D, 'O_totals': mass_O, 'C_totals': mass_C}
+
+#         # print(interior_atmosphere.output())
+        
+#         M_atm = interior_atmosphere.output()['atmosphere'][0]['mass']
+#         f_atm = M_atm/Mp
+#         atoms_1 = interior_atmosphere.output()['H_totals'][0]['atmosphere_moles']*avogadro
+#         atoms_2 = N_He
+#         atoms_3 = atoms_1*(N_D/N_H)
+#         atoms_4 = interior_atmosphere.output()['O_totals'][0]['atmosphere_moles']*avogadro
+#         atoms_5 = interior_atmosphere.output()['C_totals'][0]['atmosphere_moles']*avogadro
+
+#         if i == len(time_slices) - 1:
+#             return all_solutions, isofate_masses
+#         else:
+
+#         # run escape simulation
+#             time = time_slices[i + 1]
+#             t0 = time_slices[i]
+#             sol = isofate_coupler.isocalc(f_atm, Mp, M_star, F0, Fp, Teq, d, time, mechanism, isofate_species, rad_evol,
+#             True, atoms_1, atoms_2, atoms_3, atoms_4, atoms_5,
+#             mu, eps, activity, flux_model, stellar_type, Rp_override, t_sat, f_atm_final, n_TO_final, 
+#             n_steps, t0, rho_rcb, Johnson, RR, f_pred, thermal, H2O_reservoir, wmf, beta)
+
+#             N_H = sol['N1'][0,-1]
+#             N_He = sol['N2'][0,-1]
+#             N_D = sol['N3'][0,-1]
+#             N_O = sol['N4'][0,-1]
+#             N_C = sol['N5'][0,-1]
+
+#         # print('finished loop:', i)
+#         # print('N_O bottom loop:', N_O)
+
+    
+
+#     print('something went wrong')
+
 def TSM(Rp, Teq, Mp, Rstar, m_J, scale_factor = 1.26):
     '''
     Calculates transmission spectroscopy metric from Kepmton et al 2018
@@ -1067,3 +1208,23 @@ def TSM(Rp, Teq, Mp, Rstar, m_J, scale_factor = 1.26):
     Output: TSM score [ndim]
     '''
     return scale_factor*Rp**3*Teq*10**(-m_J/5)/(Mp*Rstar**2)
+
+
+#####_____ANALYTIC SOLUTIONS_____#####
+
+# for phi < phi_c
+
+def x2_subcrit(x2_0, tau, t):
+    return x2_0/(1 - t/tau)
+
+# for phi > phi_c
+
+def x2_supercrit(x2_0, Mp, Rp, T, phi_1, tau, t):
+    # phi_1 must be in particles/m2/s
+    m1 = M_H2/avogadro # kg/particle
+    m2 = M_HD/avogadro # kg/particle
+    b = 4.48e19*T**0.75 # [molecules/m/s] from Genda 2008 for H2 in HD
+    g = G*Mp/Rp**2 # N/kg
+    gamma = (m2 - m1)*b*g/(kb*T*phi_1) # ndim
+    print(gamma)
+    return x2_0/(1 - (t/tau))**gamma
