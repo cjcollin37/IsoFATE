@@ -135,23 +135,6 @@ beta = -1.23, n_atmodeller = int(1e2), save_molecules = False, mantle_iron_dict 
     y4 = 1*N_O # O number [atoms]
     y5 = 1*N_C # O number [atoms]
 
-    # ### radius (for atmodeller first run)
-    # if n_atmodeller != 0:
-    #     if rad_evol == False:
-    #         radius_env = 0
-    #         radius_atm = 0
-    #         radius_p = radius_core
-    #         if Rp_override != False:
-    #             radius_core = Rp_override
-    #             radius_env = 0
-    #             radius_atm = 0
-    #     else:
-    #         radius_env = R_env(Mp, f_atm, Fp, t0, thermal)
-    #         radius_atm = R_atm(T, Mp, radius_core, radius_env, mu)
-    #         radius_p = radius_core + radius_atm + radius_env
-    #         radius_p = np.min([R_B, R_H, radius_p]) # limits Rp to the min of Bondi/Hill/Lopez+Fortney radius
-
-
 ###_____Initialize arrays_____###
 
     t_a = delta_t*np.linspace(1, n_tot + 1, n_tot) + t0 # time array [s]
@@ -280,10 +263,8 @@ beta = -1.23, n_atmodeller = int(1e2), save_molecules = False, mantle_iron_dict 
             if RR == True:
                 phi = np.min([phi_RR(radius_p, Mp, T, t_a[n], F0, t0*s2yr, t_sat, beta, step_fn, F_final, t_pms, pms_factor), 
                               phi_E(t_a[n], eps, Vpot, d, F0, t0*s2yr, t_sat, beta, activity, flux_model, stellar_type, step_fn, F_final, t_pms, pms_factor)])
-                # phi = M_atm0/A/delta_t/5 # HACK
             else:
                 phi = phi_E(t_a[n], eps, Vpot, d, F0, t0*s2yr, t_sat, beta, activity, flux_model, stellar_type, step_fn, F_final, t_pms, pms_factor)
-                # phi = M_atm0/A/delta_t/3 # HACK
         elif mechanism == 'CPML':
             phi = phiE_CP(T, Mp, rho_rcb, eps, Vpot, A, mu, radius_env)
         elif mechanism == 'phi kill':
@@ -380,21 +361,6 @@ beta = -1.23, n_atmodeller = int(1e2), save_molecules = False, mantle_iron_dict 
                 atmod_full_output['O2_fugacity'] = atmod_sol['O2_g']['fugacity'][0]
                 atmod_full_output['log10dIW_1_bar'] = atmod_sol['O2_g']['log10dIW_1_bar'][0]
             if n%n_atmodeller == 0: # run atmodeller every n_atmodeller steps.
-                print('n =', n)
-                print('y1 =', y1)
-                print('y2 =', y2)
-                print('y3 =', y3)
-                print('y4 =', y4)
-                print('y5 =', y5)
-                print('Matm =', M_atm)
-                print('\n')
-                print('N_H_int =', N_H_int)
-                print('N_He_int =', N_He_int)
-                print('N_O_int =', N_O_int)
-                print('N_C_int =', N_C_int)
-                print('N_D_int =', N_D_int)
-                print('\n')
-                print('\n')
                 atmod_results, atmod_full, mantle_iron_dict = AtmodellerCoupler(T, Mp, radius_p, mu, melt_fraction_override, mantle_iron_dict,
                                                   y1+y3, y2, y4, y5, N_H_int+N_D_int, N_He_int, N_O_int, N_C_int, interior_atmosphere)
                 # mu = (atmod_full['H2O_g'][0]['atmosphere_moles']*0.018 + atmod_full['H2_g'][0]['atmosphere_moles']*M_H2 + atmod_full['O2_g'][0]['atmosphere_moles']*0.032 + atmod_full['CO_g'][0]['atmosphere_moles']*0.028 + atmod_full['CO2_g'][0]['atmosphere_moles']*0.044 + atmod_full['CH4_g'][0]['atmosphere_moles']*0.016 + atmod_full['He_g'][0]['atmosphere_moles']*M_He)/((atmod_full['H2O_g'][0]['atmosphere_moles'] + atmod_full['H2_g'][0]['atmosphere_moles'] + atmod_full['O2_g'][0]['atmosphere_moles'] + atmod_full['CO_g'][0]['atmosphere_moles'] + atmod_full['CO2_g'][0]['atmosphere_moles'] + atmod_full['CH4_g'][0]['atmosphere_moles'] + atmod_full['He_g'][0]['atmosphere_moles'])*avogadro)
@@ -454,7 +420,7 @@ beta = -1.23, n_atmodeller = int(1e2), save_molecules = False, mantle_iron_dict 
         y4 -= y4_loss
         y5 -= y5_loss
 
-        y1 = max(y1, 0) #HACK
+        y1 = max(y1, 0)
         y2 = max(y2, 0)
         y3 = max(y3, 0)
         y4 = max(y4, 0)
