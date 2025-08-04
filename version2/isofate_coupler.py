@@ -5,9 +5,9 @@ Main IsoFATE script for coulped model.
 '''
 
 import numpy as np
-from atmodeller_coupler_dev import *
+from atmodeller_coupler import *
 from constants import *
-from isofunks_public import *
+from isofunks import *
 from orbit_params import *
 from atmodeller import InteriorAtmosphere
 solubility_models = get_solubility_models()

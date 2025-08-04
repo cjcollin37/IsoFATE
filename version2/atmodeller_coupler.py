@@ -16,7 +16,7 @@ solubility_models = get_solubility_models()
 #isofate imports
 from constants import *
 from orbit_params import *
-from isofunks_public import *
+from isofunks import *
 
 #other imports
 import numpy as np
