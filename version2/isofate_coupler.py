@@ -10,6 +10,7 @@ from constants import *
 from isofunks import *
 from orbit_params import *
 from atmodeller import InteriorAtmosphere
+from atmodeller import Species
 solubility_models = get_solubility_models()
 
 def isocalc(f_atm, Mp, Mstar, F0, Fp, T, d, time = 5e9, mechanism = 'XUV', rad_evol = True,
