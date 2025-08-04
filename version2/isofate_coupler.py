@@ -5,9 +5,6 @@ Main IsoFATE script for coulped model.
 '''
 
 import numpy as np
-
-# from atmodeller_test import *
-# from atmodeller import Planet
 from atmodeller_coupler_dev import *
 from constants import *
 from isofunks_public import *
@@ -291,7 +288,6 @@ beta = -1.23, n_atmodeller = int(1e2), save_molecules = False, mantle_iron_dict 
         x4 = y4/N_tot
         x5 = y5/N_tot
 
-### TEST 7/14/25
         if y1 + y2 == 0:
             X1 = 0
             X2 = 0
@@ -299,11 +295,9 @@ beta = -1.23, n_atmodeller = int(1e2), save_molecules = False, mantle_iron_dict 
             X1 = y1/(y1+y2)
             X2 = y2/(y1+y2)
         MU = X1*mu_H + X2*mu_He
+
         Phi1, phi_c = Phi_1(phi, b, H_H, H_He, mu_H, mu_He, X1, X2, MU, output = 1) # H number flux [atoms/s/m2]
         Phi2 = Phi_2(phi, b, H_H, H_He, mu_H, mu_He, X1, X2, MU) # He number flux [atoms/s/m2]
-
-        # Phi1, phi_c = Phi_1(phi, b, H_H, H_He, mu_H, mu_He, x1, x2, mu, output = 1) # H number flux [atoms/s/m2]
-        # Phi2 = Phi_2(phi, b, H_H, H_He, mu_H, mu_He, x1, x2, mu) # He number flux [atoms/s/m2]
         Phi3 = Phi_D_Z90(Phi1, Phi2, H_H, H_D, H_He, y1, y2, y3, y4, y5, T) # D number flux [atoms/s/m2]
         Phi4 = Phi_O_Z90(Phi1, Phi2, H_H, H_O, H_He, y1, y2, y3, y4, y5, T) # O number flux [atoms/s/m2]
         Phi5 = Phi_C_Z90(Phi1, Phi2, H_H, H_C, H_He, y1, y2, y3, y4, y5, T) # C number flux [atoms/s/m2]
@@ -363,7 +357,6 @@ beta = -1.23, n_atmodeller = int(1e2), save_molecules = False, mantle_iron_dict 
             if n%n_atmodeller == 0: # run atmodeller every n_atmodeller steps.
                 atmod_results, atmod_full, mantle_iron_dict = AtmodellerCoupler(T, Mp, radius_p, mu, melt_fraction_override, mantle_iron_dict,
                                                   y1+y3, y2, y4, y5, N_H_int+N_D_int, N_He_int, N_O_int, N_C_int, interior_atmosphere)
-                # mu = (atmod_full['H2O_g'][0]['atmosphere_moles']*0.018 + atmod_full['H2_g'][0]['atmosphere_moles']*M_H2 + atmod_full['O2_g'][0]['atmosphere_moles']*0.032 + atmod_full['CO_g'][0]['atmosphere_moles']*0.028 + atmod_full['CO2_g'][0]['atmosphere_moles']*0.044 + atmod_full['CH4_g'][0]['atmosphere_moles']*0.016 + atmod_full['He_g'][0]['atmosphere_moles']*M_He)/((atmod_full['H2O_g'][0]['atmosphere_moles'] + atmod_full['H2_g'][0]['atmosphere_moles'] + atmod_full['O2_g'][0]['atmosphere_moles'] + atmod_full['CO_g'][0]['atmosphere_moles'] + atmod_full['CO2_g'][0]['atmosphere_moles'] + atmod_full['CH4_g'][0]['atmosphere_moles'] + atmod_full['He_g'][0]['atmosphere_moles'])*avogadro)
                 N_H_int = atmod_results['N_H_int']*(1 - X_DH)
                 N_D_int = atmod_results['N_H_int']*X_DH
                 N_He_int = atmod_results['N_He_int']
@@ -373,7 +366,7 @@ beta = -1.23, n_atmodeller = int(1e2), save_molecules = False, mantle_iron_dict 
                     y1 = 0
                     y3 = 0
                 else:
-                    Y3 = X_DH*atmod_results['N_H_atm'] # HACK: changed 9/11 to allow H to outgas and replenish atm
+                    Y3 = X_DH*atmod_results['N_H_atm']
                     Y1 = (1 - X_DH)*atmod_results['N_H_atm']
                     y1 = Y1
                     y3 = Y3
