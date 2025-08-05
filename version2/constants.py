@@ -37,6 +37,8 @@ M_H  = 0.001008 # molar mass of H [kg/mol]
 M_He = 0.0040026 # molar mass of He [kg/mol]
 M_O = 0.015999 # molar mass of O [kg/mol]
 M_C = 0.012011 # molar mass of C [kg/mol]
+M_N = 0.014007 # molar mass of N [kg/mol]
+M_S = 0.032065 # molar mass of S [kg/mol]
 M_Fe = 0.055845 # molar mass of Fe [kg/mol]
 M_H2O = 0.018015 # molar mass of H2O [kg/mol]
 mu_H2 = M_H2/avogadro # molecular mass of H2 [kg/molecule]
@@ -46,6 +48,8 @@ mu_D = M_D/avogadro # atomic mass of D [kg/atom]
 mu_He = M_He/avogadro # atomic mass of He [kg/atom]
 mu_O = M_O/avogadro # atomic mass of O [kg/atom]
 mu_C = M_C/avogadro # atomic mass of C [kg/atom]
+mu_N = M_N/avogadro # atomic mass of N [kg/atom]
+mu_S = M_S/avogadro # atomic mass of S [kg/atom]
 mu_Fe = M_Fe/avogadro # atomic mass of Fe [kg/atom]
 vsmow = 1.5574e-4 # Vienna Standard Mean Ocean Water (D/H for Earth's oceans)
 DtoH_solar = 0.0000194 # D/H solar mole ratio from Lodders 2003
@@ -57,6 +61,10 @@ OtoH_protosolar = 0.00058 # O/H proto-solar mole ratio from Lodders 2003 Table 2
 OtoH_protosolar_mass = OtoH_protosolar*(mu_O/mu_H) # O/H proto-solar mass ratio from Lodders 2003
 CtoH_protosolar = 0.00029 # C/H proto-solar mole ratio from Lodders 2003 Table 2
 CtoH_protosolar_mass = CtoH_protosolar*(mu_C/mu_H) # O/H proto-solar mass ratio from Lodders 2003
+NtoH_protosolar = 0.000080 # N/H proto-solar mole ratio from Lodders 2003 Table 2 (1.950e6/2.431e10)
+NtoH_protosolar_mass = NtoH_protosolar*(mu_N/mu_H) # O/H proto-solar mass ratio
+StoH_protosolar = 0.000018 # S/H proto-solar mole ratio from Lodders 2003 Table 2 (4.449e5/2.431e10)
+StoH_protosolar_mass = StoH_protosolar*(mu_S/mu_H) # O/H proto-solar mass ratio 
 mu_HHe = 0.00122/avogadro # H/He with solar abundances
 mu_H2He = 0.00227/avogadro # H2/He with solar abundances
 mu_solar = 0.00235/avogadro # average particle mass for solar metallicity
@@ -67,7 +75,7 @@ def b_H_D(T):
 def b_H_He(T):
     return 1.04e20*T**0.732 # [molecules/m/s] from Mason & Marrero 1970 for H in He
 def b_He_D(T):
-    5.087e19*T**0.728 # [molecules/m/s] approximated from b_H_D using Genda/Ikoma 2008 prescription (Appendix C)
+    return 5.087e19*T**0.728 # [molecules/m/s] approximated from b_H_D using Genda/Ikoma 2008 prescription (Appendix C)
 def b_H_O(T):
     return 4.8e19*T**0.75 # [molecules/m/s] from Wordsworth et al 2018
 def b_He_O(T):
@@ -76,3 +84,11 @@ def b_H_C(T):
     return 4.85e19*T**0.75 # [molecules/m/s] approximated from b_H_O using Genda/Ikoma 2008 prescription (Appendix C)
 def b_He_C(T):
     return 2.64e19*T**0.75 # [molecules/m/s] approximated from b_He_O using Genda/Ikoma 2008 prescription (Appendix C)
+def b_H_N(T):
+    return 4.85e19*T**0.75 # [molecules/m/s] approximated from b_H_O using Genda/Ikoma 2008 prescription (Appendix C)
+def b_He_N(T):  
+    return 2.65e19*T**0.75 # [molecules/m/s] approximated from b_He_O using Genda/Ikoma 2008 prescription (Appendix C)
+def b_H_S(T):
+    return 4.73e19*T**0.75 # [molecules/m/s] approximated from b_H_O using Genda/Ikoma 2008 prescription (Appendix C)
+def b_He_S(T):
+    return 2.48e19*T**0.75 # [molecules/m/s] approximated from b_He_O using Genda/Ikoma 2008 prescription (Appendix C)
