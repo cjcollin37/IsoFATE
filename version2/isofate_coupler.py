@@ -106,13 +106,13 @@ beta = -1.23, n_atmodeller = int(1e2), save_molecules = False, mantle_iron_dict 
     if N_H != 0 and N_D != 0: # needed to allow D and H to outgas from mantle
         X_DH = N_D/(N_H + N_D) # ignores D in mantle
 
-    H2O_g = Species.create_gas("H2O_g", solubility=solubility_models["H2O_basalt_dixon95"])
-    H2_g = Species.create_gas("H2_g", solubility=solubility_models["H2_basalt_hirschmann12"])
-    O2_g = Species.create_gas("O2_g")
-    CO_g = Species.create_gas("CO_g", solubility=solubility_models["CO_basalt_yoshioka19"])
-    CO2_g = Species.create_gas("CO2_g", solubility=solubility_models["CO2_basalt_dixon95"])
-    CH4_g = Species.create_gas("CH4_g", solubility=solubility_models["CH4_basalt_ardia13"])
-    He_g = Species.create_gas("He_g", solubility=solubility_models["He_basalt_jambon86"])
+    H2O_g = Species.create_gas("H2O", solubility=solubility_models["H2O_basalt_dixon95"])
+    H2_g = Species.create_gas("H2", solubility=solubility_models["H2_basalt_hirschmann12"])
+    O2_g = Species.create_gas("O2")
+    CO_g = Species.create_gas("CO", solubility=solubility_models["CO_basalt_yoshioka19"])
+    CO2_g = Species.create_gas("CO2", solubility=solubility_models["CO2_basalt_dixon95"])
+    CH4_g = Species.create_gas("CH4", solubility=solubility_models["CH4_basalt_ardia13"])
+    He_g = Species.create_gas("He", solubility=solubility_models["He_basalt_jambon86"])
 
     species = SpeciesCollection((H2_g, H2O_g, O2_g, CO_g, CO2_g, CH4_g, He_g))
 
