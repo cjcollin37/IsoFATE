@@ -16,4 +16,5 @@ documentation for details.
    :caption: Contents:
 
    isocalcs.rst
+   tutorial.ipynb
 
