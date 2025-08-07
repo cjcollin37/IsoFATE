@@ -5,10 +5,10 @@ Main IsoFATE script for coulped model.
 '''
 
 import numpy as np
-from atmodeller_coupler import *
-from constants import *
-from isofunks import *
-from orbit_params import *
+from isofate.atmodeller_coupler import *
+from isofate.constants import *
+from isofate.isofunks import *
+from isofate.orbit_params import *
 from atmodeller import InteriorAtmosphere
 from atmodeller import Species
 from atmodeller import SpeciesCollection

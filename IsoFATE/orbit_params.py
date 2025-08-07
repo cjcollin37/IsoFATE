@@ -5,7 +5,7 @@ Miscellaneous functions for planetary orbital parameters
 '''
 
 import numpy as np
-from constants import *
+from isofate.constants import *
 
 def Luminosity(R, T):
     '''
