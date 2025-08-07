@@ -1,0 +1,5 @@
+numpy==2.3.1
+scipy==1.16.1
+matplotlib==3.10.0
+atmodeller>=0.7.0
+optimistix==0.0.10
