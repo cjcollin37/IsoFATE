@@ -6,7 +6,6 @@ import isofate.constants as const
 def isoplot(sol,n_atmodeller,Mp,f_atm,Fp,T,M_star,d):
 
     t_a = sol['time']
-    # adaptt_a = sol['time_adapted']
     rp_a = sol['Rp']
     # renv_a = sol['renv']
     menv_a = sol['Matm']
