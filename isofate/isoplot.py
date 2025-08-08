@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from IsoFATE.isofate..isofunks import *
-import IsoFATE.isofate..constants as const
+from IsoFATE.isofate.isofunks import *
+import IsoFATE.isofate.constants as const
 
 def isoplot(sol,n_atmodeller,Mp,f_atm,Fp,T,M_star,d):
 
