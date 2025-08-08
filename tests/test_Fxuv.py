@@ -1,5 +1,5 @@
-from isofunks import Fxuv
-from constants import s2yr
+from IsoFATE.isofate.isofunks import Fxuv
+from IsoFATE.isofate.constants import s2yr
 import numpy as np
 
 t=1e6, F0=1e2, t0 = 1e6, t_sat = 5e8, beta = -1.23, step_fn = False, F_final = 0, t_pms = 1e7, pms_factor = 1e2
