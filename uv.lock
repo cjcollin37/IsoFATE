@@ -704,7 +704,7 @@ wheels = [
 
 [[package]]
 name = "isofate"
-version = "0.0.1"
+version = "0.0.3"
 source = { editable = "." }
 dependencies = [
     { name = "atmodeller" },
@@ -716,11 +716,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "atmodeller", specifier = ">=0.7.0" },
-    { name = "matplotlib", specifier = "==3.10.0" },
-    { name = "numpy", specifier = "==2.3" },
-    { name = "optimistix", specifier = "==0.0.10" },
-    { name = "scipy", specifier = "==1.16.1" },
+    { name = "atmodeller" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "optimistix" },
+    { name = "scipy" },
 ]
 
 [[package]]
