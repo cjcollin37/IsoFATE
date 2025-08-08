@@ -1,4 +1,4 @@
-from isofate.isofunks import Fxuv
+from IsoFATE.isofate.isofunks import Fxuv
 
 '''
 Test script for Fxuv function
