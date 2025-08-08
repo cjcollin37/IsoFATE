@@ -6,17 +6,17 @@ Test script for atmodeller function for isocalc to call for isofate-atmodeller c
 
 import logging
 import optimistix as optx
-from atmodeller.atmodeller import (
+from atmodeller import (
     Planet,
     SolverParameters
 )
-from atmodeller.atmodeller.solubility import get_solubility_models
+from atmodeller.solubility import get_solubility_models
 solubility_models = get_solubility_models()
 
 #isofate imports
-from constants import *
-from orbit_params import *
-from isofunks import *
+from isofate.constants import *
+from isofate.orbit_params import *
+from isofate.isofunks import *
 
 #other imports
 import numpy as np
