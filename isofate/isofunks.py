@@ -27,8 +27,8 @@ from scipy.interpolate import RegularGridInterpolator as RGI
 # from atmodeller.utilities import earth_oceans_to_kg
 
 # import imports
-from IsoFATE.isofate..constants import *
-from IsoFATE.isofate..orbit_params import *
+from IsoFATE.isofate.constants import *
+from IsoFATE.isofate.orbit_params import *
 
 # incident XUV flux
 
