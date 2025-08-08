@@ -1,4 +1,4 @@
-from isofunks import isocalc
+from isofate.isofunks import isocalc
 
 '''
 Test script for isocalc function
