@@ -9,15 +9,15 @@ import time as TIME
 
 import matplotlib.pyplot as plt
 
-from IsoFATE.isofate.constants import *
+from isofate.constants import *
 
 # from debug_isofate_coupler_v2 import *
-from IsoFATE.isofate.isofate_coupler import *
+from isofate.isofate_coupler import *
 
 # from isofate_coupler_v3 import *
 # from isofate_coupler_v3_cannon import *
-from IsoFATE.isofate.isofunks import *
-from IsoFATE.isofate.orbit_params import *
+from isofate.isofunks import *
+from isofate.orbit_params import *
 
 start = TIME.time()
 
