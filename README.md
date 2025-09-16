@@ -2,7 +2,7 @@
 
 ## About
 
-***Please note: I am currrently working to package this code into a more usable format and expect to release the full package by the end of the summer 2025.***
+***Please note: I am currrently working to package this code into a more usable format and expect to release the full package by the end of 2025.***
 
 Isotopic Fractionation via ATmospheric Escape (IsoFATE) is a Python code that models mass fractionation resulting from diffusive separation in escaping planetary atmospheres and numerically computes atmospheric species abundance over time. The model is currently tuned to sub-Neptune sized planets with rocky cores of Earth-like bulk composition and primordial H/He atmospheres. F, G, K, and M type stellar fluxes are readily implemented. This code is not yet a Python package, so no installation is required. Simply download the source files to use.
 
@@ -14,7 +14,11 @@ Author: Collin Cherubim
 
 If you use IsoFATE, please cite:
 
-- Cherubim, C.; Wordsworth, R., Hu, R.; Shkolnik, E. (2024). Strong fractionation of deuterium and helium in sub-Neptune atmospheres along the the radius valley, ApJ (https://ui.adsabs.harvard.edu/abs/2024arXiv240210690C/abstract)
+- Cherubim, C.; Wordsworth, R.; Hu, R.; Shkolnik, E. (2024). Strong fractionation of deuterium and helium in sub-Neptune atmospheres along the the radius valley, ApJ (https://ui.adsabs.harvard.edu/abs/2024arXiv240210690C/abstract)
+
+and
+
+- Cherubim, C.; Wordsworth, R.; Bower, D.; Sossi, P.; Adams, D.; Hu, R. (2025) An Oxidation Gradient Straddling the Small Planet Radius Valley, ApJ (https://ui.adsabs.harvard.edu/abs/2025ApJ...983...97C/abstract)
 
 ## Tutorial
 
