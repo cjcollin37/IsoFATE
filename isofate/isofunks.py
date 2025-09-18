@@ -354,7 +354,7 @@ def Phi_D_GC23(Phi_H, Phi_He, H_H, H_D, H_He, N_H, N_He, N_D, T):
 
 # number flux deuterium derived from Zahnle et al 1990
 
-def Phi_D_Z90(Phi_H, Phi_He, H_H, H_D, H_He, N_H, N_He, N_D, N_O, N_C, T):
+def Phi_D_Z90(Phi_H, Phi_He, H_H, H_D, H_He, N_H, N_He, N_D, N_O, N_C, N_N, N_S, T):
     '''
     Calculates number flux of deuterium for simultaneous calculation of H/He/D escape
     Derived from Zahnle et al 1990 starting w/ their Eq (17)
@@ -365,7 +365,7 @@ def Phi_D_Z90(Phi_H, Phi_He, H_H, H_D, H_He, N_H, N_He, N_D, N_O, N_C, T):
         - N_i: particles of species i
         - T: eq temp [K]
     '''
-    if (N_H + N_He + N_D + N_O + N_C == 0) or N_H == 0:
+    if (N_H + N_He + N_D + N_O + N_C + N_N + N_S == 0) or N_H == 0:
         return 0
     b_H_D = 7.183e19*T**0.728 # [molecules/m/s] from Genda & Ikoma 2008 for D in H (not measured directly)
     b_H_He = 1.04e20*T**0.732 # [molecules/m/s] from Mason & Marrero 1970 for H in He
@@ -374,7 +374,7 @@ def Phi_D_Z90(Phi_H, Phi_He, H_H, H_D, H_He, N_H, N_He, N_D, N_O, N_C, T):
     alpha_3 = b_H_D/b_He_D
     Phi_DL_D = b_H_D*(1/H_D - 1/H_H)
     Phi_DL_He = b_H_He*(1/H_He - 1/H_H)
-    x_He = N_He/(N_H + N_He + N_D + N_O + N_C)
+    x_He = N_He/(N_H + N_He + N_D + N_O + N_C + N_N + N_S)
     f_He = N_He/N_H
     f_D = N_D/N_H
     num = Phi_H - Phi_DL_D + alpha_2*Phi_DL_He*x_He + alpha_3*Phi_He
@@ -410,7 +410,7 @@ def Phi_D_Z90_mod2(Phi_H, Phi_He, H_H, H_D, H_He, N_H, N_He, N_D, T):
     return max(0, f_D*num/denom)
 
 
-def Phi_O_Z90(Phi_H, Phi_He, H_H, H_O, H_He, N_H, N_He, N_D, N_O, N_C, T):
+def Phi_O_Z90(Phi_H, Phi_He, H_H, H_O, H_He, N_H, N_He, N_D, N_O, N_C, N_N, N_S, T):
     '''
     Calculates number flux of oxygen for simultaneous calculation of H/He/O escape
     Derived from Zahnle et al 1990 starting w/ their Eq (17)
@@ -421,7 +421,7 @@ def Phi_O_Z90(Phi_H, Phi_He, H_H, H_O, H_He, N_H, N_He, N_D, N_O, N_C, T):
         - N_i: particles of species i
         - T: eq temp [K]
     '''
-    if (N_H + N_He + N_D + N_O + N_C == 0) or N_H == 0:
+    if (N_H + N_He + N_D + N_O + N_C + N_N + N_S == 0) or N_H == 0:
         return 0
     b_H_O = 4.8e19*T**0.75 # [molecules/m/s] from Wordsworth et al 2018
     b_H_He = 1.04e20*T**0.732 # [molecules/m/s] from Mason & Marrero 1970 for H in He
@@ -430,14 +430,14 @@ def Phi_O_Z90(Phi_H, Phi_He, H_H, H_O, H_He, N_H, N_He, N_D, N_O, N_C, T):
     alpha_3 = b_H_O/b_He_O
     Phi_DL_O = b_H_O*(1/H_O - 1/H_H)
     Phi_DL_He = b_H_He*(1/H_He - 1/H_H)
-    x_He = N_He/(N_H + N_He + N_D + N_O + N_C)
+    x_He = N_He/(N_H + N_He + N_D + N_O + N_C + N_N + N_S)
     f_He = N_He/N_H
     f_O = N_O/N_H
     num = Phi_H - Phi_DL_O + alpha_2*Phi_DL_He*x_He + alpha_3*Phi_He
     denom = 1 + alpha_3*f_He
     return max(0, f_O*num/denom)
 
-def Phi_C_Z90(Phi_H, Phi_He, H_H, H_C, H_He, N_H, N_He, N_D, N_O, N_C, T):
+def Phi_C_Z90(Phi_H, Phi_He, H_H, H_C, H_He, N_H, N_He, N_D, N_O, N_C, N_N, N_S, T):
     '''
     Calculates number flux of carbon for simultaneous calculation of H/He/D/O/C escape
     Derived from Zahnle et al 1990 starting w/ their Eq (17)
@@ -448,7 +448,7 @@ def Phi_C_Z90(Phi_H, Phi_He, H_H, H_C, H_He, N_H, N_He, N_D, N_O, N_C, T):
         - N_i: particles of species i
         - T: eq temp [K]
     '''
-    if (N_H + N_He + N_D + N_O + N_C == 0) or N_H == 0:
+    if (N_H + N_He + N_D + N_O + N_C + N_N + N_S == 0) or N_H == 0:
         return 0
     b_H_C = 4.85e19*T**0.75 # [molecules/m/s] approximated from b_H_O using Genda/Ikoma 2008 prescription (Appendix C)
     b_H_He = 1.04e20*T**0.732 # [molecules/m/s] from Mason & Marrero 1970 for H in He
@@ -457,12 +457,66 @@ def Phi_C_Z90(Phi_H, Phi_He, H_H, H_C, H_He, N_H, N_He, N_D, N_O, N_C, T):
     alpha_3 = b_H_C/b_He_C
     Phi_DL_C = b_H_C*(1/H_C - 1/H_H)
     Phi_DL_He = b_H_He*(1/H_He - 1/H_H)
-    x_He = N_He/(N_H + N_He + N_D + N_O + N_C)
+    x_He = N_He/(N_H + N_He + N_D + N_O + N_C + N_N + N_S)
     f_He = N_He/N_H
     f_C = N_C/N_H
     num = Phi_H - Phi_DL_C + alpha_2*Phi_DL_He*x_He + alpha_3*Phi_He
     denom = 1 + alpha_3*f_He
     return max(0, f_C*num/denom)
+
+def Phi_N_Z90(Phi_H, Phi_He, H_H, H_N, H_He, N_H, N_He, N_D, N_O, N_C, N_N, N_S, T):
+    '''
+    Calculates number flux of nitrogen for simultaneous calculation of H/He/D/O/C/N/S escape
+    Derived from Zahnle et al 1990 starting w/ their Eq (17)
+
+    Inputs:
+        - Phi_i: number flux [particles/m2/s]
+        - H_i: scale height [m]
+        - N_i: particles of species i
+        - T: eq temp [K]
+    '''
+    if (N_H + N_He + N_D + N_O + N_C + N_N + N_S == 0) or N_H == 0:
+        return 0
+    b_H_N = 4.85e19*T**0.75 # [molecules/m/s] approximated from b_H_O using Genda/Ikoma 2008 prescription (Appendix C)
+    b_H_He = 1.04e20*T**0.732 # [molecules/m/s] from Mason & Marrero 1970 for H in He
+    b_He_N = 2.65e19*T**0.75 # [molecules/m/s] approximated from b_He_O using Genda/Ikoma 2008 prescription (Appendix C)
+    alpha_2 = b_H_N/b_H_He
+    alpha_3 = b_H_N/b_He_N
+    Phi_DL_N = b_H_N*(1/H_N - 1/H_H)
+    Phi_DL_He = b_H_He*(1/H_He - 1/H_H)
+    x_He = N_He/(N_H + N_He + N_D + N_O + N_C + N_N + N_S)
+    f_He = N_He/N_H
+    f_N = N_N/N_H
+    num = Phi_H - Phi_DL_N + alpha_2*Phi_DL_He*x_He + alpha_3*Phi_He
+    denom = 1 + alpha_3*f_He
+    return max(0, f_N*num/denom)
+
+def Phi_S_Z90(Phi_H, Phi_He, H_H, H_N, H_He, N_H, N_He, N_D, N_O, N_C, N_N, N_S, T):
+    '''
+    Calculates number flux of sulfur for simultaneous calculation of H/He/D/O/C/N/S escape
+    Derived from Zahnle et al 1990 starting w/ their Eq (17)
+
+    Inputs:
+        - Phi_i: number flux [particles/m2/s]
+        - H_i: scale height [m]
+        - N_i: particles of species i
+        - T: eq temp [K]
+    '''
+    if (N_H + N_He + N_D + N_O + N_C + N_N + N_S == 0) or N_H == 0:
+        return 0
+    b_H_S = 4.73e19*T**0.75 # [molecules/m/s] approximated from b_H_O using Genda/Ikoma 2008 prescription (Appendix C)
+    b_H_He = 1.04e20*T**0.732 # [molecules/m/s] from Mason & Marrero 1970 for H in He
+    b_He_S = 2.48e19*T**0.75 # [molecules/m/s] approximated from b_He_O using Genda/Ikoma 2008 prescription (Appendix C)
+    alpha_2 = b_H_S/b_H_He
+    alpha_3 = b_H_S/b_He_S
+    Phi_DL_S = b_H_S*(1/H_N - 1/H_H)
+    Phi_DL_He = b_H_He*(1/H_He - 1/H_H)
+    x_He = N_He/(N_H + N_He + N_D + N_O + N_C + N_N + N_S)
+    f_He = N_He/N_H
+    f_S = N_S/N_H
+    num = Phi_H - Phi_DL_S + alpha_2*Phi_DL_He*x_He + alpha_3*Phi_He
+    denom = 1 + alpha_3*f_He
+    return max(0, f_S*num/denom)
 
 #####_____ Lopez & Fortney 2014 thermal evolution equations _____#####
 

@@ -25,8 +25,8 @@ import numpy as np
 # logger.setLevel(logging.INFO)
 
 def AtmodellerCoupler(Teq, Mp, Rp, mu, melt_fraction, mantle_iron_dict,
-                      N_H_atm, N_He_atm, N_O_atm, N_C_atm,
-                      N_H_int, N_He_int, N_O_int, N_C_int, interior_atmosphere):
+                      N_H_atm, N_He_atm, N_O_atm, N_C_atm, N_N_atm, N_S_atm,
+                      N_H_int, N_He_int, N_O_int, N_C_int, N_N_int, N_S_int, interior_atmosphere):
 
     results = {}
     gamma = 7/5
@@ -47,20 +47,33 @@ def AtmodellerCoupler(Teq, Mp, Rp, mu, melt_fraction, mantle_iron_dict,
     mass_O: float = (N_O_atm + N_O_int)*mu_O
     mass_C: float = (N_C_atm + N_C_int)*mu_C
     mass_He: float = (N_He_atm + N_He_int)*mu_He
-
+    mass_N: float = (N_N_atm + N_N_int)*mu_N
+    mass_S: float = (N_S_atm + N_S_int)*mu_S
     mass_constraints = {
         "H": mass_H,
         "O": mass_O,
         "C": mass_C,
         "He": mass_He,
+        "N": mass_N,
+        "S": mass_S,
     }
 
-    solver = optx.Newton
-    solver_parameters = SolverParameters(solver=solver, throw=True)
+    MASS_CUTOFF: float = 10**9
+    mass_constraints = {
+        "H": max(MASS_CUTOFF, mass_H),
+        "O": max(MASS_CUTOFF, mass_O),
+        "C": max(MASS_CUTOFF, mass_C),
+        "He": max(MASS_CUTOFF, mass_He),
+        "N": max(MASS_CUTOFF, mass_N),
+        "S": max(MASS_CUTOFF, mass_S)
+    }
+
+    # solver = optx.Newton
+    # solver_parameters = SolverParameters(solver=solver, throw=True)
     interior_atmosphere.solve(
     planet=planet,
     mass_constraints=mass_constraints,
-    solver_parameters=solver_parameters
+    # solver_parameters=solver_parameters
 )
 
     output = interior_atmosphere.output
@@ -111,6 +124,10 @@ def AtmodellerCoupler(Teq, Mp, Rp, mu, melt_fraction, mantle_iron_dict,
         results['N_O_int'] = sol['element_O']['dissolved_number'][0]
     results['N_C_atm'] = sol['element_C']['atmosphere_number'][0]
     results['N_C_int'] = sol['element_C']['dissolved_number'][0]
+    results['N_N_atm'] = sol['element_N']['atmosphere_number'][0]
+    results['N_N_int'] = sol['element_N']['dissolved_number'][0]
+    results['N_S_atm'] = sol['element_S']['atmosphere_number'][0]
+    results['N_S_int'] = sol['element_S']['dissolved_number'][0]
     results['M_atm'] = sol['atmosphere']['mass'][0]
     results['T_surface'] = T_surface
     results['T_surface_atmod'] = surface_temperature
