@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "isofate"
-version = "0.0.9"
+version = "0.1.1"
 requires-python = ">=3.11"
 
 dependencies = [
@@ -15,9 +15,12 @@ dependencies = [
  "optimistix==0.0.10"
 ]
 
-[tool.setuptools]
-include-package-data = true
-
 [tool.setuptools.packages.find]
 where = ["."] 
 include = ["isofate*"]
+
+[tool.setuptools.package-data]
+isofate = ["data/**/*"]
+
+#[tool.setuptools]
+#include-package-data = true
