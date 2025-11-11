@@ -1116,7 +1116,9 @@ def MeltFraction(Mp, T):
     global _MELT_FRACTION_INTERPOLATOR
     # On the first call, the variable will be None. Do the one-time setup.
     if _MELT_FRACTION_INTERPOLATOR is None:
-        with importlib.resources.files('isofate.data').joinpath('melt_fraction_grid.npz') as data_path:
+        # with importlib.resources.files('isofate.data').joinpath('melt_fraction_grid.npz') as data_path:
+        with importlib.resources.as_file(
+        importlib.resources.files('isofate.data').joinpath('melt_fraction_grid.npz')) as data_path:
             data = np.load(data_path)
             temp_grid = data['temp_grid']
             mass_grid = data['mass_grid']
