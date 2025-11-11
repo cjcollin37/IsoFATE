@@ -26,9 +26,9 @@ start = TIME.time()
 # T_star = 6000 # [K]
 
 # # M1 star
-# R_star = 0.5*Rs # [m]
-# M_star = 0.5*Ms
-# T_star = 3600 # [K]
+R_star = 0.5*Rs # [m]
+M_star = 0.5*Ms
+T_star = 3600 # [K]
 
 # K5 star
 # R_star = 0.7*Rs # [m]
@@ -48,9 +48,9 @@ start = TIME.time()
 # T_star = 3841 # [K]
 
 # K2-3
-R_star = 0.546*Rs # [m]
-M_star = 0.549*Ms # [kg]
-T_star = 3844 # [K]
+# R_star = 0.546*Rs # [m]
+# M_star = 0.549*Ms # [kg]
+# T_star = 3844 # [K]
 
 # GJ 3090
 # R_star = 0.516*Rs # [m]
@@ -99,7 +99,7 @@ L = Luminosity(R_star, T_star) # [W]
 # P = 33/s2day
 
 # # # LHS 1140 b
-# f_atm = 0.00085
+# f_atm = 0.0018
 # Mp = 5.6*Me
 # P = 24.74/s2day
 
@@ -115,9 +115,14 @@ L = Luminosity(R_star, T_star) # [W]
 # P = 23/s2day
 
 # K2-3 c
-f_atm = 0.015
-Mp = 2.68*Me
-P = 24.6/s2day
+# f_atm = 0.015
+# Mp = 2.68*Me
+# P = 24.6/s2day
+
+# IL world
+f_atm = 0.001049211388465194
+Mp = 1.2474905792906028*Me
+P = 86.23173213822659
 
 # f_atm = 0.0075
 # Mp = 2*Me
@@ -127,15 +132,15 @@ a = SemiMajor(M_star, P) # [m]
 Fp = Insolation(L, a)  # [W/m2]
 T = EqTemp(Fp, A = 0) # planetary eq temp [K]
 F0 = Fp*1e-3 # use for M star 
-# F_final = 0 # 0.170 for GJ 699 MUSCLES; use 0.033 for GJ 1132 MUSCLES
-F_final = 0.175 # K2-3 c Diamond-Lowe et al. 2022
+F_final = 0.17 # 0.170 for GJ 699 MUSCLES; use 0.033 for GJ 1132 MUSCLES
+# F_final = 0.175 # K2-3 c Diamond-Lowe et al. 2022
 # F0 = Fp*10**(-3.5)*(M_star/Ms) # use for G, K stars
 flux_model = 'power law'
 stellar_type = 'M1'
 t_sat = 5e8 # XUV saturation time [yr]
 # t_sat = t_jump*1e9 # XUV saturation time [yr]
 d = a # orbital distance [m]
-time = 6.9e9 # total simulation time [yr]
+time = 5e9 # total simulation time [yr]
 t0 = 1e6 # start time [yr]
 t_pms = 0 # pms phase duration [yr]
 step_fn = False
@@ -143,8 +148,8 @@ mechanism = 'XUV' # if using fixed phi, be sure to change Rp = r_core below and 
 RR = True
 rad_evol = True
 Rp_override = False
-n_steps = int(1e4)
-n_atmodeller = int(1e3)
+n_steps = int(1e5)
+n_atmodeller = int(1e2)
 thermal = True
 M_atm = Mp*f_atm # initial atmospheric mass [kg]
 melt_fraction_override = False
@@ -197,7 +202,7 @@ print('mantle_iron_dict', mantle_iron_dict)
 # run simulation (from isofate.py)
 sol = isocalc(f_atm, Mp, M_star, F0, Fp, T, d, time, mechanism, rad_evol,
 N_H = N_H, N_He = N_He, N_D = N_D, N_O = N_O, N_C = N_C, N_N = N_N, N_S = N_S, melt_fraction_override = melt_fraction_override,
-mu = mu_avg, eps = 0.15, activity = 'medium', flux_model = flux_model, stellar_type = stellar_type, 
+mu = mu_avg, eps = 0.8, activity = 'medium', flux_model = flux_model, stellar_type = stellar_type, 
 Rp_override = Rp_override, t_sat = t_sat, step_fn = step_fn, F_final = F_final, t_pms = t_pms, pms_factor = 1e2,
 n_steps = n_steps, t0 = t0, rho_rcb = 1.0, RR = RR,
 thermal = thermal, beta = -1.23, n_atmodeller = n_atmodeller, 
@@ -504,7 +509,7 @@ plt.tight_layout()
 
 print('done (', round((TIME.time() - start)/60, 2), 'mins )')
 
-# path = '/Users/collin/Documents/Harvard/Research/atm_escape/IsoFATE/case_studies/LHS1140b_f0009_Fi1_tjump_Ffinal170_XUV+RR_atmod1e2_ntime1e5_t5e9_tpms0'
+# path = '/Users/collin/Documents/Harvard/Research/atm_escape/IsoFATE/case_studies/LHS1140b_eps80_f0018_Fi1_tjump_Ffinal170_XUV+RR_atmod1e2_ntime1e5_t5e9_tpms0'
 
 # with open(path, 'wb') as file:
 #     pickle.dump(sol, file)
