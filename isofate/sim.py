@@ -98,10 +98,10 @@ L = Luminosity(R_star, T_star) # [W]
 # Mp = 8.63*Me
 # P = 33/s2day
 
-# # # LHS 1140 b
-# f_atm = 0.0018
-# Mp = 5.6*Me
-# P = 24.74/s2day
+# # LHS 1140 b
+f_atm = 0.0018
+Mp = 5.6*Me
+P = 24.74/s2day
 
 # GJ 3090 b
 # f_atm = 0.03
@@ -120,9 +120,9 @@ L = Luminosity(R_star, T_star) # [W]
 # P = 24.6/s2day
 
 # IL world
-f_atm = 0.001049211388465194
-Mp = 1.2474905792906028*Me
-P = 86.23173213822659
+# f_atm = 0.001049211388465194
+# Mp = 1.2474905792906028*Me
+# P = 86.23173213822659
 
 # f_atm = 0.0075
 # Mp = 2*Me
@@ -148,8 +148,8 @@ mechanism = 'XUV' # if using fixed phi, be sure to change Rp = r_core below and 
 RR = True
 rad_evol = True
 Rp_override = False
-n_steps = int(1e5)
-n_atmodeller = int(1e2)
+n_steps = int(1e4)
+n_atmodeller = int(1e3)
 thermal = True
 M_atm = Mp*f_atm # initial atmospheric mass [kg]
 melt_fraction_override = False
