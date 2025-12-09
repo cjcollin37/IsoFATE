@@ -14,6 +14,9 @@ import sys
 import emcee
 import numpy as np
 from scipy import stats
+import time
+import datetime as dt
+from zoneinfo import ZoneInfo
 
 from isofate.constants import *
 from isofate.isofate_coupler import *
@@ -211,6 +214,10 @@ def collect_model_outputs(sampler, n_samples=1000):
     return model_outputs
 
 def main():
+
+    start = time.time()
+    print('start time (EST):', dt.datetime.now(ZoneInfo('America/New_York')))
+
     # MCMC parameters
     ndim = 4  # [log_f_atm, t_pms, time, log_OtoH_enhancement]
     nwalkers = 8
@@ -273,6 +280,8 @@ def main():
         mcmc = np.percentile(flat_samples[:, i], [16, 50, 84])
         q = np.diff(mcmc)
         print(f"{param}: {mcmc[1]:.6f} +{q[1]:.6f} -{q[0]:.6f}")
+
+    print('done (', round((time.time() - start)/60, 2), 'mins )')
 
 if __name__ == "__main__":
     main()
