@@ -506,6 +506,92 @@ def Phi_S_Z90(Phi_H, Phi_He, H_H, H_N, H_He, N_H, N_He, N_D, N_O, N_C, N_N, N_S,
     denom = 1 + alpha_3*f_He
     return max(0, f_S*num/denom)
 
+def get_binary_diffusion_coeff(species1, species2, T):
+    '''
+    Get binary diffusion coefficient between two species at temperature T
+    Always returns b_light_heavy regardless of input order
+    '''
+    # Create function lookup dictionary (only created once when function is called)
+    coeff_functions = {
+        ('H', 'D'): b_H_D,
+        ('H', 'He'): b_H_He,
+        ('H', 'O'): b_H_O,
+        ('H', 'C'): b_H_C,
+        ('H', 'N'): b_H_N,
+        ('H', 'S'): b_H_S,
+        ('He', 'D'): b_He_D,
+        ('He', 'O'): b_He_O,
+        ('He', 'C'): b_He_C,
+        ('He', 'N'): b_He_N,
+        ('He', 'S'): b_He_S
+    }
+
+    # Always sort to ensure consistent lookup (lighter element first by atomic mass)
+    mass_order = {'H': 1, 'D': 2, 'He': 4, 'C': 12, 'N': 14, 'O': 16, 'S': 32}
+    if mass_order.get(species1, 0) <= mass_order.get(species2, 0):
+        key = (species1, species2)
+    else:
+        key = (species2, species1)
+
+    # Get function and call it with temperature
+    func = coeff_functions.get(key, b_H_He)  # default to H-He if pair not found
+    return func(T)
+
+def Phi_minor_species(Phi_1, Phi_2, H_1, H_2, H_minor, N_values, T, minor_species_idx, light_dominant_idx, heavy_dominant_idx):
+    '''
+    Calculates number flux for minor species using correct Zahnle et al. 1990 formulation
+    
+    Inputs:
+        - Phi_1: number flux of lightest dominant species [atoms/s/m2]
+        - Phi_2: number flux of heaviest dominant species [atoms/s/m2]  
+        - H_1: scale height of lightest dominant species [m]
+        - H_2: scale height of heaviest dominant species [m]
+        - H_minor: scale height of minor species [m]
+        - N_values: list [N_H, N_He, N_D, N_O, N_C, N_N, N_S] - current abundances
+        - T: temperature [K]
+        - minor_species_idx: index (0-4) of the minor species being calculated
+        - light_dominant_idx: index of lightest dominant species (species 1)
+        - heavy_dominant_idx: index of heaviest dominant species (species 2)
+    '''
+    if sum(N_values) == 0:
+        return 0
+
+    species_names = ['H', 'He', 'D', 'O', 'C', 'N', 'S']
+    minor_name = species_names[minor_species_idx]
+    light_name = species_names[light_dominant_idx]    # species 1
+    heavy_name = species_names[heavy_dominant_idx]    # species 2
+
+    # Get binary diffusion coefficients
+    b_1_minor = get_binary_diffusion_coeff(light_name, minor_name, T)  # b between species 1 and minor
+    b_2_minor = get_binary_diffusion_coeff(heavy_name, minor_name, T)  # b between species 2 and minor
+    b_1_2 = get_binary_diffusion_coeff(light_name, heavy_name, T)      # b between species 1 and 2
+
+    alpha_2 = b_1_minor / b_1_2 if b_1_2 != 0 else 1        # b_1_minor/b_1_2
+    alpha_3 = b_1_minor / b_2_minor if b_2_minor != 0 else 1  # b_1_minor/b_2_minor
+    Phi_DL_minor = b_1_minor * (1/H_minor - 1/H_1)
+    Phi_DL_2 = b_1_2 * (1/H_2 - 1/H_1)
+
+    N_1 = N_values[light_dominant_idx]   # lightest dominant species
+    N_2 = N_values[heavy_dominant_idx]   # heaviest dominant species
+    N_minor = N_values[minor_species_idx]
+
+    if N_1 == 0:
+        return 0
+
+    f_2 = N_2 / N_1           # N_2/N_1 (heavy/light dominant)
+    f_minor = N_minor / N_1   # N_minor/N_1
+
+    # Calculate molar fraction of species 2 in total atmosphere
+    N_total = sum(N_values)
+    x_2 = N_2 / N_total if N_total > 0 else 0
+
+    # Zahnle et al. 1990 formulation
+    num = Phi_1 - Phi_DL_minor + alpha_2 * Phi_DL_2 * x_2 + alpha_3 * Phi_2
+    denom = 1 + alpha_3 * f_2
+
+    return max(0, f_minor * num / denom)
+
+
 #####_____ Lopez & Fortney 2014 thermal evolution equations _____#####
 
 # planetary core radius
