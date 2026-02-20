@@ -32,6 +32,6 @@ That should do it!
 
 There are no formal tutorials for IsoFATE yet, but there will be soon! Please contact me directly at ccherubim@g.harvard.edu for support.
 
-"constants.py," "isofunks.py," and "orbit_params.py" contain physical constants and supporting functions required to run the main isofate_.py scripts.
-
 Run sim.py to get things up and running quickly.
+
+The engine of the code is in the ```isocalc``` function in isofate_coupler.py. Files "constants.py," "isofunks.py," and "orbit_params.py" contain physical constants and supporting functions. Atmodeller is called with atmodeller_coupler.py.
