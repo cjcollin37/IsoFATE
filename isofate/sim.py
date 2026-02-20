@@ -26,9 +26,9 @@ start = TIME.time()
 # T_star = 6000 # [K]
 
 # # M1 star
-R_star = 0.5*Rs # [m]
-M_star = 0.5*Ms
-T_star = 3600 # [K]
+# R_star = 0.5*Rs # [m]
+# M_star = 0.5*Ms
+# T_star = 3600 # [K]
 
 # K5 star
 # R_star = 0.7*Rs # [m]
@@ -36,11 +36,11 @@ T_star = 3600 # [K]
 # T_star = 4440 # [K]
 
 # # # LHS 1140
-# R_star = 0.22*Rs # [m]
-# M_star = 0.18*Ms # [kg]
-# T_star = 3096 # [K]
-# t_jump = 5.9 - 15.4*(M_star/Ms)
-# L = 0.0038*Ls
+R_star = 0.22*Rs # [m]
+M_star = 0.18*Ms # [kg]
+T_star = 3096 # [K]
+t_jump = 5.9 - 15.4*(M_star/Ms)
+L = 0.0038*Ls
 
 # # Kepler-138
 # R_star = 0.535*Rs # [m]
@@ -61,6 +61,17 @@ T_star = 3600 # [K]
 # R_star = 0.469*Rs # [m]
 # M_star = 0.495*Ms
 # T_star = 3500 # [K]
+
+# HAT-P-11, K4V
+# R_star = 0.752*Rs # [m]
+# M_star = 0.809*Ms # [kg]
+# T_star = 4780 # [K]
+
+# TRAPPIST-1
+# R_star = 0.1192*Rs # [m]
+# M_star = 0.0898*Ms # [kg]
+# T_star = 2566 # [K]
+# t_jump = 5.9 - 15.4*(M_star/Ms)
 
 L = Luminosity(R_star, T_star) # [W]
 
@@ -99,9 +110,9 @@ L = Luminosity(R_star, T_star) # [W]
 # P = 33/s2day
 
 # # # LHS 1140 b
-# f_atm = 0.0018
-# Mp = 5.6*Me
-# P = 24.74/s2day
+f_atm = 0.00085
+Mp = 5.6*Me
+P = 24.74/s2day
 
 # GJ 3090 b
 # f_atm = 0.03
@@ -119,44 +130,81 @@ L = Luminosity(R_star, T_star) # [W]
 # Mp = 2.68*Me
 # P = 24.6/s2day
 
-# IL world
-f_atm = 0.001049211388465194
-Mp = 1.2474905792906028*Me
-P = 86.23173213822659
+# # IL world
+# # f_atm = 0.001049211388465194
+# # Mp = 1.2474905792906028*Me
+# # P = 86.23173213822659
+# f_atm = 2.00655135e-03
+# Mp = 1.3615101475752467*Me
+# P = 51.53009252/s2day
 
-# f_atm = 0.0075
-# Mp = 2*Me
-# P = 10/s2day
+# # HAT-P-11 b
+# f_atm = 0.13
+# Mp = 0.081*Mjup
+# # Mp = 0.073*Mjup
+# P = 4.8878162/s2day
+# # P = Period(0.0425*au2m, M_star) # perihelion
+# # P = Period(0.0635*au2m, M_star) # aphelion
+
+# # TRAPPIST-1 c
+# f_atm = 0.0265
+# Mp = 1.308*Me
+# P = 2.42/s2day
+# # F_final = 1e2*Fe_xuv
+
+# TRAPPIST-1 f
+# f_atm = 0.005
+# Mp = 1.039*Me
+# P = 9.21/s2day
+# F_final = 1e2*Fe_xuv
+
+# TRAPPIST-1 g
+# f_atm = 0.005
+# Mp = 1.321*Me
+# P = 12.35/s2day
+
+# # TRAPPIST-1 h
+# f_atm = 0.02
+# Mp = 0.0326*Me
+# P = 18.77/s2day
+
+# # N2 dynamic test planet
+# # f_atm = 0.03795544265173505
+# f_atm = 0.0398
+# Mp = 2.0063872276215733*Me
+# P = 2.7202404227417087/s2day
 
 a = SemiMajor(M_star, P) # [m]
 Fp = Insolation(L, a)  # [W/m2]
 T = EqTemp(Fp, A = 0) # planetary eq temp [K]
 F0 = Fp*1e-3 # use for M star 
-F_final = 0.17 # 0.170 for GJ 699 MUSCLES; use 0.033 for GJ 1132 MUSCLES
+F_final = 0.17 # LHS 1140; 0.170 for GJ 699 MUSCLES; use 0.033 for GJ 1132 MUSCLES
 # F_final = 0.175 # K2-3 c Diamond-Lowe et al. 2022
+# F_final = 1e2*Fe_xuv
 # F0 = Fp*10**(-3.5)*(M_star/Ms) # use for G, K stars
 flux_model = 'power law'
 stellar_type = 'M1'
-t_sat = 5e8 # XUV saturation time [yr]
-# t_sat = t_jump*1e9 # XUV saturation time [yr]
+# t_sat = 2e8 # XUV saturation time [yr]
+t_sat = t_jump*1e9 # XUV saturation time [yr]
 d = a # orbital distance [m]
 time = 5e9 # total simulation time [yr]
 t0 = 1e6 # start time [yr]
 t_pms = 0 # pms phase duration [yr]
-step_fn = False
+step_fn = True
 mechanism = 'XUV' # if using fixed phi, be sure to change Rp = r_core below and rad_evol = False
 RR = True
+eps = 0.15
 rad_evol = True
 Rp_override = False
 n_steps = int(1e5)
-n_atmodeller = int(1e2)
+n_atmodeller = int(1e4)
 thermal = True
 M_atm = Mp*f_atm # initial atmospheric mass [kg]
 melt_fraction_override = False
-save_molecules = True
+save_molecules = False
 # mantle_iron_dict = {'type': 'static', 'Fe_mass_fraction': 0.1}
 mantle_iron_dict = False
-
+dynamic_phi = True
 OtoH_enhancement = 1
 OtoH_enhanced = OtoH_protosolar*OtoH_enhancement
 OtoH_enhanced_mass = OtoH_enhanced*(mu_O/mu_H)
@@ -198,15 +246,16 @@ print('time =', time/1e9, 'Gyr')
 print('mechanism =', mechanism)
 print('rad_evol =', rad_evol)
 print('mantle_iron_dict', mantle_iron_dict)
+print('dynamic_phi =', dynamic_phi)
 
 # run simulation (from isofate.py)
 sol = isocalc(f_atm, Mp, M_star, F0, Fp, T, d, time, mechanism, rad_evol,
 N_H = N_H, N_He = N_He, N_D = N_D, N_O = N_O, N_C = N_C, N_N = N_N, N_S = N_S, melt_fraction_override = melt_fraction_override,
-mu = mu_avg, eps = 0.8, activity = 'medium', flux_model = flux_model, stellar_type = stellar_type, 
+mu = mu_avg, eps = eps, activity = 'medium', flux_model = flux_model, stellar_type = stellar_type, 
 Rp_override = Rp_override, t_sat = t_sat, step_fn = step_fn, F_final = F_final, t_pms = t_pms, pms_factor = 1e2,
 n_steps = n_steps, t0 = t0, rho_rcb = 1.0, RR = RR,
 thermal = thermal, beta = -1.23, n_atmodeller = n_atmodeller, 
-save_molecules = save_molecules, mantle_iron_dict = mantle_iron_dict)
+save_molecules = save_molecules, mantle_iron_dict = mantle_iron_dict, dynamic_phi = dynamic_phi)
 
 # path = '/Users/collin/Documents/Harvard/Research/atm_escape/IsoFATE/monte_carlo/atmodeller/corrected_Psi/transient_D_world_full_isofate'
 # outfile = open(path, 'wb')
@@ -253,8 +302,10 @@ if n_atmodeller != 0:
     n_CH4 = sol['atmodeller_final']['CH4_atm']
     n_N2 = sol['atmodeller_final']['N2_atm']
     n_S2 = sol['atmodeller_final']['S2_atm']
+    n_H2O4S = sol['atmodeller_final']['H2O4S_atm']
+    n_SO2 = sol['atmodeller_final']['SO2_atm']
     # n_H2O4S = sol['atmodeller_final']['H2O4S_atm']
-    n_total_atm = n_H2O + n_H2 + n_O2 + n_CO2 + n_CO + n_CH4 + n_N2 + n_S2 + NHe_a[-1]/avogadro
+    n_total_atm = n_H2O + n_H2 + n_O2 + n_CO2 + n_CO + n_CH4 + n_N2 + n_S2 + n_H2O4S + n_SO2 + NHe_a[-1]/avogadro
     x_CO2 = n_CO2/n_total_atm
     x_CO = n_CO/n_total_atm
     x_CH4 = n_CH4/n_total_atm
@@ -263,25 +314,31 @@ if n_atmodeller != 0:
     x_H2O = n_H2O/n_total_atm
     x_N2 = n_N2/n_total_atm
     x_S2 = n_S2/n_total_atm
+    x_H2O4S = n_H2O4S/n_total_atm
+    x_SO2 = n_SO2/n_total_atm
     N_tot = N_H + N_He + N_D + N_O + N_C + N_N + N_S
-    N_tot_molecular = (n_H2O + n_H2 + n_O2 + n_CO + n_CO2 + n_N2 + n_S2 + n_CH4)*avogadro + NHe_a[-1]
-    x_H = N_H/N_tot
-    x_He = N_He/N_tot
+    N_tot_molecular = (n_H2O + n_H2 + n_O2 + n_CO + n_CO2 + n_N2 + n_S2 + n_H2O4S + n_SO2 + n_CH4)*avogadro + NHe_a[-1]
+
+    #### This is all wrong, you need to fix with the actual output. You're just using initial conditions here.
+    # x_H = N_H/N_tot
+    # x_He = N_He/N_tot
     x_He_molecular = NHe_a[-1]/N_tot_molecular
-    x_D = N_D/N_tot
-    x_O = N_O/N_tot
-    x_C = N_C/N_tot
-    x_N = N_N/N_tot
-    x_S = N_S/N_tot
-    print('x_H2O =', x_H2O)
-    print('x_H2 =', x_H2)
-    print('x_He =', x_He_molecular)
-    print('x_O2 =', x_O2)
-    print('x_CO2 =', x_CO2)
-    print('x_CO =', x_CO)
-    print('x_CH4 =', x_CH4)
-    print('x_N2 =', x_N2)
-    print('x_S2 =', x_S2)
+    # x_D = N_D/N_tot
+    # x_O = N_O/N_tot
+    # x_C = N_C/N_tot
+    # x_N = N_N/N_tot
+    # x_S = N_S/N_tot
+    # print('x_H2O =', x_H2O)
+    # print('x_H2 =', x_H2)
+    # print('x_He =', x_He_molecular)
+    # print('x_O2 =', x_O2)
+    # print('x_CO2 =', x_CO2)
+    # print('x_CO =', x_CO)
+    # print('x_CH4 =', x_CH4)
+    # print('x_N2 =', x_N2)
+    # print('x_S2 =', x_S2)
+    # print('x_H2O4S =', x_H2O4S)
+    # print('x_SO2 =', x_SO2)
 # calculate mass fraction of He
 
 Y = NHe_a*mu_He/(NH_a*mu_H + NHe_a*mu_He + ND_a*mu_D + NO_a*mu_O + NC_a*mu_C)
@@ -446,20 +503,23 @@ ax5.plot(t_a*s2yr, Ts_atmod, color = 'mediumslateblue')
 ax5.set_xscale('log')
 ax5.set_ylabel('surface temp [K]', labelpad = 2)
 ax5.set_ylim(-100, 6100)
-ax5.annotate(f'Rp = {round(rp_a[-1]/Re, 2)} Re, Mp = {round(Mp/Me, 2)} Me, Teq = {round(T, 0)} K', (1e7, 5500), fontsize = 8)
-ax5.annotate('final fatm:'+str(round(fenv_a[-1], 6)), (1e7, 5100), fontsize = 8)
-ax5.annotate('final D/H:'+str(round(ND_a[-1]/NH_a[-1]/DtoH_solar, 2))+' [Solar]', (1e7, 4700), fontsize = 8)
+ax5.annotate(f'Rp = {round(rp_a[-1]/Re, 2)} Re, Mp = {round(Mp/Me, 2)} Me, Teq = {round(T, 0)} K', (2e6, 5500), fontsize = 8)
+ax5.annotate('final fatm:'+str(round(fenv_a[-1], 6)), (2e6, 5100), fontsize = 8)
+ax5.annotate('final D/H:'+str(round(ND_a[-1]/NH_a[-1]/DtoH_solar, 2))+' [Solar]', (2e6, 4700), fontsize = 8)
 if n_atmodeller != 0:
-    ax5.annotate('final He concn:'+str(round(x_He_molecular, 4))+'='+str(round(Y[-1], 4))+' kg/kg', (1e7, 4300), fontsize = 8)
-    ax5.annotate('final O2 concn:'+str(round(x_O2, 4)), (1e7, 3900), fontsize = 8)
-    ax5.annotate('final H2O concn:'+str(round(x_H2O, 4)), (1e7, 3500), fontsize = 8)
-    ax5.annotate('final CO2 concn:'+str(round(x_CO2, 4)), (1e7, 3100), fontsize = 8)
-    ax5.annotate('final CO concn:'+str(round(x_CO, 4)), (1e7, 2700), fontsize = 8)
-    ax5.annotate('final CH4 concn:'+str(round(x_CH4, 4)), (1e7, 2300), fontsize = 8)
-    ax5.annotate('final H2 concn:'+str(round(x_H2, 4)), (1e7, 1900), fontsize = 8)
-    ax5.annotate('final N2 concn:'+str(round(x_N2, 4)), (1e7, 1500), fontsize = 8)
-    ax5.annotate('final S2 concn:'+str(round(x_S2, 4)), (1e7, 1100), fontsize = 8)
-    # ax5.annotate('final H2O4S concn:'+str(round(x_H2O4S, 4)), (1e6, 700), fontsize = 8)
+    ax5.annotate('final He concn:'+str(round(x_He_molecular, 4))+'='+str(round(Y[-1], 4))+' kg/kg', (2e6, 4300), fontsize = 8)
+    ax5.annotate('final O2 concn:'+str(round(x_O2, 4)), (2e6, 3900), fontsize = 8)
+    ax5.annotate('final H2O concn:'+str(round(x_H2O, 4)), (2e6, 3500), fontsize = 8)
+    ax5.annotate('final CO2 concn:'+str(round(x_CO2, 4)), (2e6, 3100), fontsize = 8)
+    ax5.annotate('final CO concn:'+str(round(x_CO, 4)), (2e6, 2700), fontsize = 8)
+    ax5.annotate('final CH4 concn:'+str(round(x_CH4, 4)), (2e6, 2300), fontsize = 8)
+    ax5.annotate('final H2 concn:'+str(round(x_H2, 4)), (2e6, 1900), fontsize = 8)
+    ax5.annotate('final N2 concn:'+str(round(x_N2, 4)), (2e6, 1500), fontsize = 8)
+    ax5.annotate('final S2 concn:'+str(round(x_S2, 4)), (2e6, 1100), fontsize = 8)
+    ax5.annotate('final H2O4S concn:'+str(round(x_H2O4S, 4)), (2e6, 700), fontsize = 8)
+    ax5.annotate('final SO2 concn:'+str(round(x_SO2, 4)), (2e6, 300), fontsize = 8)
+else:
+    ax5.annotate('final X_He (molar concn) ='+str(NHe_a[-1]/(NH_a[-1] + NHe_a[-1] + ND_a[-1] + NO_a[-1] + NC_a[-1])), (2e6, 4300), fontsize = 8)
 # envelope mass
 ax6.loglog(t_a*s2yr, menv_a/Me, color = 'midnightblue')
 # ax6.set_title('envelope mass')
@@ -510,10 +570,12 @@ plt.tight_layout()
 print('done (', round((TIME.time() - start)/60, 2), 'mins )')
 
 # path = '/Users/collin/Documents/Harvard/Research/atm_escape/IsoFATE/case_studies/LHS1140b_eps80_f0018_Fi1_tjump_Ffinal170_XUV+RR_atmod1e2_ntime1e5_t5e9_tpms0'
+# path = '/Users/collin/Documents/Harvard/Research/atm_escape/IsoFATE/case_studies/N2world_dynamic_phi_fatm0398_XUV+RR_atmod1e2_ntime1e5_t5e9_tpms0'
+# path = '/Users/collin/Documents/Harvard/Research/atm_escape/IsoFATE/case_studies/HAT-P-11b_fatm18_aphelion_XUV+RR_atmod0_ntime1e5_tsat1e9_tpms0'
+# plt.savefig(path+'.png', dpi = 300, bbox_inches = 'tight')
+
 
 # with open(path, 'wb') as file:
 #     pickle.dump(sol, file)
-
-# plt.savefig(path+'.png', dpi = 300, bbox_inches = 'tight')
 
 plt.show();
