@@ -6,16 +6,6 @@ Isotopic Fractionation via ATmospheric Escape (IsoFATE) is a Python code that mo
 
 Author: Collin Cherubim
 
-## Citation
-
-If you use IsoFATE, please cite:
-
-- Cherubim, C.; Wordsworth, R.; Hu, R.; Shkolnik, E. (2024). Strong fractionation of deuterium and helium in sub-Neptune atmospheres along the the radius valley, ApJ (https://ui.adsabs.harvard.edu/abs/2024arXiv240210690C/abstract)
-
-and
-
-- Cherubim, C.; Wordsworth, R.; Bower, D.; Sossi, P.; Adams, D.; Hu, R. (2025) An Oxidation Gradient Straddling the Small Planet Radius Valley, ApJ (https://ui.adsabs.harvard.edu/abs/2025ApJ...983...97C/abstract)
-
 ## Installation
 
 IsoFATE is pip installable, though I strongly recommend using the package manager, uv, to avoid dependency issues. You can pipx install uv into an environemnt, or pip install uv or brew install uv:
@@ -35,3 +25,13 @@ There are no formal tutorials for IsoFATE yet, but there will be soon! Please co
 Run sim.py to get things up and running quickly.
 
 The engine of the code is in the ```isocalc``` function in isofate_coupler.py. Files "constants.py," "isofunks.py," and "orbit_params.py" contain physical constants and supporting functions. Atmodeller is called with atmodeller_coupler.py.
+
+## Citation
+
+If you use IsoFATE, please cite:
+
+- Cherubim, C.; Wordsworth, R.; Hu, R.; Shkolnik, E. (2024). Strong fractionation of deuterium and helium in sub-Neptune atmospheres along the the radius valley, ApJ (https://ui.adsabs.harvard.edu/abs/2024arXiv240210690C/abstract)
+
+and
+
+- Cherubim, C.; Wordsworth, R.; Bower, D.; Sossi, P.; Adams, D.; Hu, R. (2025) An Oxidation Gradient Straddling the Small Planet Radius Valley, ApJ (https://ui.adsabs.harvard.edu/abs/2025ApJ...983...97C/abstract)
