@@ -9,9 +9,29 @@ import pickle
 import corner
 import matplotlib.pyplot as plt
 import numpy as np
+from isofate.constants import avogadro
+from isofate.constants import Re
 
 
-filename = '/Users/collin/Documents/Harvard/Research/isofate_mcmc/IsoFATE_LHS1140b_MCMC_results_n1e5_natmod0_eps15_tjump_Ffinal17_constant_tpms_OH_12w_50s.pickle'
+# filename = '/Users/collin/Documents/Harvard/Research/isofate_mcmc/IsoFATE_LHS1140b_MCMC_results_n1e5_natmod0_eps15_tjump_Ffinal17_constant_tpms_OH_48w_7500s.pickle'
+filename = '/Users/collin/Documents/Harvard/Research/isofate_mcmc/IsoFATE_LHS1140b_MCMC_results_n1e5_natmod1e3_eps15_tjump_Ffinal17_64w_500s.pickle'
+
+# GLOBAL PARAMETERS FOR BURN-IN AND THINNING
+DISCARD = 350  # Number of steps to discard as burn-in
+THIN = 1        # Take every Nth sample
+
+# PLOT RANGE LIMITS (set to None for auto-range)
+# Format: [min, max] for each parameter, or None for auto
+SPECIES_PLOT_RANGE = None  # Set to None for automatic ranging
+# SPECIES_PLOT_RANGE = [(8, 24), (20, 30), (12, 24), (20, 24), (20, 24), (20, 24), (20, 24)] 
+
+# Mapping from parameter names to their latex labels
+PARAMETER_LABELS = {
+    'log_f_atm': r'$\log f_{\rm atm}$',
+    't_pms': r'$t_{\rm PMS}$ [yr]',
+    'time': r'$t$ [yr]',
+    'log_OtoH_enhancement': r'$\log$ O/H enhancement'
+}
 
 def detect_mode(model_outputs):
     """
@@ -49,39 +69,80 @@ def plot_mcmc_results(filename=filename):
     # Extract data
     samples = results['samples']
     parameter_names = results['parameter_names']
+    model_outputs_raw = results['model_outputs']
+    true_values = results['true_values']
     
     # Print basic info
     print(f"Chain shape: {samples.shape}")
     print(f"Parameters: {parameter_names}")
     
     # Flatten the chain (discard burn-in and thin if needed)
-    # Adjust discard and thin values based on your chain
-    discard = 5  # Discard first step as burn-in
-    thin = 1      # Take every sample
-    flat_samples = samples[discard::thin, :, :].reshape((-1, samples.shape[-1]))
+    flat_samples = samples[DISCARD::THIN, :, :].reshape((-1, samples.shape[-1]))
     
     print(f"Flattened samples shape: {flat_samples.shape}")
     
-    # Create parameter labels with units/descriptions
-    labels = [
-        r'$\log f_{\rm atm}$',
-        r'$t_{\rm PMS}$ [yr]',
-        r'$t$ [yr]',
-        r'$\log$ O/H enhancement'
-    ]
+    # Process model outputs with same discard and thin
+    model_outputs_processed = model_outputs_raw[DISCARD::THIN, :]
+    
+    # Extract model output values
+    model_output_data = []
+    for output in model_outputs_processed.flat:
+        if output is not None:
+            # Extract and convert values
+            Rp_final = output['Rp_final'] / Re  # Convert to Earth radii
+            flux_ratio = output['flux_ratio']
+            mdot = output['mdot'] * 1e3  # Convert to g/s
+            model_output_data.append([Rp_final, flux_ratio, mdot])
+        else:
+            model_output_data.append([np.nan, np.nan, np.nan])
+    
+    model_output_array = np.array(model_output_data)
+    
+    # Check that shapes match
+    print(f"Flat samples shape: {flat_samples.shape}")
+    print(f"Model output array shape: {model_output_array.shape}")
+    
+    # Combine parameter samples with model outputs
+    combined_samples = np.hstack([flat_samples, model_output_array])
+    
+    # Remove rows with any NaN values
+    valid_rows = ~np.isnan(combined_samples).any(axis=1)
+    combined_samples = combined_samples[valid_rows]
+    
+    print(f"Combined samples shape after removing NaNs: {combined_samples.shape}")
+    
+    # Create parameter labels dynamically based on actual parameters
+    labels = [PARAMETER_LABELS[param] for param in parameter_names]
+    
+    # Add model output labels
+    labels.extend([
+        r'$R_p$ [$R_{\oplus}$]',
+        r'H/He flux ratio',
+        r'$\dot{M}$ [g/s]'
+    ])
+    
+    # Create truth values array (convert to same units as plotted data)
+    truths = [None] * len(parameter_names)  # No truth values for parameters
+    truths.extend([
+        true_values['Rp_final'] / Re,  # Convert to Earth radii
+        true_values['flux_ratio'],
+        true_values['mdot'] * 1e3  # Convert to g/s
+    ])
     
     # Create corner plot
     fig = corner.corner(
-        flat_samples,
+        combined_samples,
         labels=labels,
         quantiles=[0.16, 0.5, 0.84],  # Show 1-sigma bounds
         show_titles=True,
         title_kwargs={"fontsize": 12},
         label_kwargs={"fontsize": 14},
-        title_fmt='.4f'  # Format for displayed values
+        title_fmt='.4f',  # Format for displayed values
+        truths=truths,  # Add vertical lines for true values
+        truth_color='red'  # Color for truth lines
     )
     
-    plt.suptitle('MCMC Results: Initial Conditions', 
+    plt.suptitle('MCMC Results: Initial Conditions & Model Outputs', 
                  fontsize=16, y=0.98)
     
     # Save the plot
@@ -92,9 +153,29 @@ def plot_mcmc_results(filename=filename):
     print("\nParameter estimates (median with 1-sigma bounds):")
     print("-" * 60)
     for i, param in enumerate(parameter_names):
-        mcmc = np.percentile(flat_samples[:, i], [16, 50, 84])
+        mcmc = np.percentile(combined_samples[:, i], [16, 50, 84])
         q = np.diff(mcmc)
-        print(f"{param:20s}: {mcmc[1]:8.4f} +{q[1]:7.4f} -{q[0]:7.4f}")
+        if param == 'time' or param == 'mdot':
+            print(f"{param:20s}: {mcmc[1]:8.4e} +{q[1]:7.4e} -{q[0]:7.4e}")
+        else:
+            print(f"{param:20s}: {mcmc[1]:8.4f} +{q[1]:7.4f} -{q[0]:7.4f}")
+    
+    # Print model output estimates
+    print("\nModel output estimates (median with 1-sigma bounds):")
+    print("-" * 60)
+    model_output_names = ['Rp [R_Earth]', 'flux_ratio', 'mdot [g/s]']
+    for i, name in enumerate(model_output_names):
+        idx = len(parameter_names) + i
+        mcmc = np.percentile(combined_samples[:, idx], [16, 50, 84])
+        q = np.diff(mcmc)
+        print(f"{name:20s}: {mcmc[1]:8.4f} +{q[1]:7.4f} -{q[0]:7.4f}")
+    
+    # Print true values for comparison
+    print("\nTrue values:")
+    print("-" * 60)
+    print(f"{'Rp [R_Earth]':20s}: {true_values['Rp_final']/Re:8.4f}")
+    print(f"{'flux_ratio':20s}: {true_values['flux_ratio']:8.4f}")
+    print(f"{'mdot [g/s]':20s}: {true_values['mdot']*1e3:8.4f}")
     
     # Print acceptance fraction if available
     if 'log_prob' in results:
@@ -102,7 +183,7 @@ def plot_mcmc_results(filename=filename):
         print(f"\nLog probability shape: {log_prob.shape}")
         print(f"Final log probability range: {np.min(log_prob[-100:]):.2f} to {np.max(log_prob[-100:]):.2f}")
     
-    return flat_samples, fig
+    return combined_samples, fig
 
 def plot_model_outputs_corner(filename=filename):
     """
@@ -119,21 +200,25 @@ def plot_model_outputs_corner(filename=filename):
     # Handle the 2D array structure from sampler.get_blobs()
     print(f"Model outputs shape: {model_outputs_raw.shape}")
     
+    # Apply discard and thin BEFORE processing
+    model_outputs_processed = model_outputs_raw[DISCARD::THIN, :]
+    print(f"Model outputs shape after discard/thin: {model_outputs_processed.shape}")
+    
     # Detect which mode we're in
-    mode = detect_mode(model_outputs_raw)
+    mode = detect_mode(model_outputs_processed)
     print(f"Detected mode: {mode}")
     
     # Flatten the 2D array and filter out None values
     model_outputs = []
-    total_samples = model_outputs_raw.size
+    total_samples = model_outputs_processed.size
     successful_samples = 0
     
-    for output in model_outputs_raw.flat:
+    for output in model_outputs_processed.flat:
         if output is not None:
             model_outputs.append(output)
             successful_samples += 1
     
-    print(f"Total samples: {total_samples}, Successful: {successful_samples}")
+    print(f"Total samples (after discard/thin): {total_samples}, Successful: {successful_samples}")
     
     if len(model_outputs) == 0:
         print("No valid model outputs found!")
@@ -151,13 +236,13 @@ def plot_model_outputs_corner(filename=filename):
             row_data = []
             for species in species_names:
                 if species in output and output[species] is not None:
-                    row_data.append(output[species])
+                    row_data.append(output[species]/avogadro)
                 else:
                     row_data.append(np.nan)
             species_data.append(row_data)
         
-        species_labels = [f'{s} [mol]' for s in species_names]
-        plot_title = 'MCMC Results: Species Moles (Basic Mode)'
+        species_labels = [f'$\\log$ {s} [mol]' for s in species_names]
+        plot_title = 'MCMC Results: Species Moles (Basic Mode, Log Scale)'
         save_suffix = '_mcmc_corner_plot_species_basic.png'
         
     elif mode == 'atmodeller':
@@ -183,7 +268,7 @@ def plot_model_outputs_corner(filename=filename):
                 else:
                     row_data.append(np.nan)
             
-            # Surface temperature
+            # Surface temperature (keep linear, not log)
             if 'T_surf_atmod' in output and output['T_surf_atmod'] is not None:
                 row_data.append(output['T_surf_atmod'])
             else:
@@ -195,13 +280,13 @@ def plot_model_outputs_corner(filename=filename):
         species_labels = []
         for species in atm_species:
             species_name = species.replace('n_', '').replace('_atm', '')
-            species_labels.append(f'{species_name} (atm)')
+            species_labels.append(f'$\\log$ {species_name} (atm) [mol]')
         for species in mantle_species:
             species_name = species.replace('n_', '').replace('_mantle', '')
-            species_labels.append(f'{species_name} (mantle)')
-        species_labels.append(r'$T_{\rm surf}$ [K]')
+            species_labels.append(f'$\\log$ {species_name} (mantle) [mol]')
+        species_labels.append(r'$T_{\rm surf}$ [K]')  # Temperature stays linear
         
-        plot_title = 'MCMC Results: Species Moles & Surface Temperature (Atmodeller)'
+        plot_title = 'MCMC Results: Species Moles & Surface Temperature (Atmodeller, Log Scale)'
         save_suffix = '_mcmc_corner_plot_species_atmodeller.png'
         
     else:
@@ -251,15 +336,28 @@ def plot_model_outputs_corner(filename=filename):
     
     print(f"Plotting {len(valid_columns)} parameters with variation")
     
+    # Convert species to log scale (all columns except temperature if present)
+    # Check if last valid column is temperature (only for atmodeller mode)
+    if mode == 'atmodeller' and 'T_{\rm surf}' in valid_labels[-1]:
+        # Last column is temperature, keep it linear
+        log_species_array = filtered_array.copy()
+        log_species_array[:, :-1] = np.log10(filtered_array[:, :-1] + 1e-15)  # Log for species
+        # Temperature column stays as-is
+    else:
+        # All columns are species, convert all to log
+        log_species_array = np.log10(filtered_array + 1e-15)
+    
     # Create corner plot
+# Create corner plot
     fig1 = corner.corner(
-        filtered_array,
+        log_species_array,
         labels=valid_labels,
         quantiles=[0.16, 0.5, 0.84],
         show_titles=True,
         title_kwargs={"fontsize": 10},
         label_kwargs={"fontsize": 12},
-        title_fmt='.2e'
+        title_fmt='.2f',  # Changed format for log values
+        range=SPECIES_PLOT_RANGE  # Add this line
     )
     
     plt.suptitle(plot_title, fontsize=14, y=0.98)
@@ -267,7 +365,7 @@ def plot_model_outputs_corner(filename=filename):
     plt.savefig(filename.replace('.pickle', save_suffix), dpi=300, bbox_inches='tight')
     plt.show()
     
-    return filtered_array, fig1
+    return filtered_array, fig1  # Return original array, not log
 
 def plot_molar_abundances_corner(filename=filename):
     """
@@ -281,8 +379,12 @@ def plot_molar_abundances_corner(filename=filename):
     
     model_outputs_raw = results['model_outputs']
     
+    # Apply discard and thin BEFORE processing
+    model_outputs_processed = model_outputs_raw[DISCARD::THIN, :]
+    print(f"Model outputs shape after discard/thin: {model_outputs_processed.shape}")
+    
     # Detect which mode we're in
-    mode = detect_mode(model_outputs_raw)
+    mode = detect_mode(model_outputs_processed)
     
     if mode != 'atmodeller':
         print(f"Molar abundance plotting only available for atmodeller mode (n_atmodeller != 0).")
@@ -292,7 +394,7 @@ def plot_molar_abundances_corner(filename=filename):
     # Handle the 2D array structure from sampler.get_blobs()
     # Flatten the 2D array and filter out None values
     model_outputs = []
-    for output in model_outputs_raw.flat:
+    for output in model_outputs_processed.flat:
         if output is not None:
             model_outputs.append(output)
     
@@ -425,12 +527,8 @@ def plot_chains(filename=filename):
     # Create chain plots
     fig, axes = plt.subplots(len(parameter_names), figsize=(10, 8), sharex=True)
     
-    labels = [
-        r'$\log f_{\rm atm}$',
-        r'$t_{\rm PMS}$ [yr]',
-        r'$t$ [yr]',
-        r'$\log$ O/H enhancement'
-    ]
+    # Create parameter labels dynamically based on actual parameters
+    labels = [PARAMETER_LABELS[param] for param in parameter_names]
     
     # Handle case where there's only one parameter
     if len(parameter_names) == 1:
@@ -459,6 +557,7 @@ def main():
     mode = detect_mode(results['model_outputs'])
     print(f"\n{'='*60}")
     print(f"Running plotting script in {mode.upper()} mode")
+    print(f"DISCARD: {DISCARD} steps, THIN: every {THIN} steps")
     print(f"{'='*60}\n")
     
     # Create corner plot for initial conditions

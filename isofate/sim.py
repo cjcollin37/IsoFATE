@@ -36,11 +36,11 @@ start = TIME.time()
 # T_star = 4440 # [K]
 
 # # # LHS 1140
-# R_star = 0.22*Rs # [m]
-# M_star = 0.18*Ms # [kg]
-# T_star = 3096 # [K]
-# t_jump = 5.9 - 15.4*(M_star/Ms)
-# L = 0.0038*Ls
+R_star = 0.22*Rs # [m]
+M_star = 0.18*Ms # [kg]
+T_star = 3096 # [K]
+t_jump = 5.9 - 15.4*(M_star/Ms)
+L = 0.0038*Ls
 
 # # Kepler-138
 # R_star = 0.535*Rs # [m]
@@ -63,9 +63,15 @@ start = TIME.time()
 # T_star = 3500 # [K]
 
 # HAT-P-11, K4V
-R_star = 0.752*Rs # [m]
-M_star = 0.809*Ms # [kg]
-T_star = 4780 # [K]
+# R_star = 0.752*Rs # [m]
+# M_star = 0.809*Ms # [kg]
+# T_star = 4780 # [K]
+
+# TRAPPIST-1
+# R_star = 0.1192*Rs # [m]
+# M_star = 0.0898*Ms # [kg]
+# T_star = 2566 # [K]
+# t_jump = 5.9 - 15.4*(M_star/Ms)
 
 L = Luminosity(R_star, T_star) # [W]
 
@@ -104,9 +110,9 @@ L = Luminosity(R_star, T_star) # [W]
 # P = 33/s2day
 
 # # # LHS 1140 b
-# f_atm = 0.00085
-# Mp = 5.6*Me
-# P = 24.74/s2day
+f_atm = 0.00085
+Mp = 5.6*Me
+P = 24.74/s2day
 
 # GJ 3090 b
 # f_atm = 0.03
@@ -132,16 +138,35 @@ L = Luminosity(R_star, T_star) # [W]
 # Mp = 1.3615101475752467*Me
 # P = 51.53009252/s2day
 
-# HAT-P-11 b
-f_atm = 0.16
-Mp = 0.081*Mjup
+# # HAT-P-11 b
+# f_atm = 0.13
+# Mp = 0.081*Mjup
+# # Mp = 0.073*Mjup
 # P = 4.8878162/s2day
-# P = Period(0.0425*au2m, M_star) # perihelion
-P = Period(0.0635*au2m, M_star) # aphelion
+# # P = Period(0.0425*au2m, M_star) # perihelion
+# # P = Period(0.0635*au2m, M_star) # aphelion
 
-# f_atm = 0.0075
-# Mp = 2*Me
-# P = 10/s2day
+# # TRAPPIST-1 c
+# f_atm = 0.0265
+# Mp = 1.308*Me
+# P = 2.42/s2day
+# # F_final = 1e2*Fe_xuv
+
+# TRAPPIST-1 f
+# f_atm = 0.005
+# Mp = 1.039*Me
+# P = 9.21/s2day
+# F_final = 1e2*Fe_xuv
+
+# TRAPPIST-1 g
+# f_atm = 0.005
+# Mp = 1.321*Me
+# P = 12.35/s2day
+
+# # TRAPPIST-1 h
+# f_atm = 0.02
+# Mp = 0.0326*Me
+# P = 18.77/s2day
 
 # # N2 dynamic test planet
 # # f_atm = 0.03795544265173505
@@ -153,33 +178,34 @@ a = SemiMajor(M_star, P) # [m]
 Fp = Insolation(L, a)  # [W/m2]
 T = EqTemp(Fp, A = 0) # planetary eq temp [K]
 F0 = Fp*1e-3 # use for M star 
-F_final = 0.17 # 0.170 for GJ 699 MUSCLES; use 0.033 for GJ 1132 MUSCLES
+F_final = 0.17 # LHS 1140; 0.170 for GJ 699 MUSCLES; use 0.033 for GJ 1132 MUSCLES
 # F_final = 0.175 # K2-3 c Diamond-Lowe et al. 2022
-F0 = Fp*10**(-3.5)*(M_star/Ms) # use for G, K stars
+# F_final = 1e2*Fe_xuv
+# F0 = Fp*10**(-3.5)*(M_star/Ms) # use for G, K stars
 flux_model = 'power law'
 stellar_type = 'M1'
-t_sat = 1e8 # XUV saturation time [yr]
-# t_sat = t_jump*1e9 # XUV saturation time [yr]
+# t_sat = 2e8 # XUV saturation time [yr]
+t_sat = t_jump*1e9 # XUV saturation time [yr]
 d = a # orbital distance [m]
-time = 10e9 # total simulation time [yr]
+time = 5e9 # total simulation time [yr]
 t0 = 1e6 # start time [yr]
 t_pms = 0 # pms phase duration [yr]
-step_fn = False
+step_fn = True
 mechanism = 'XUV' # if using fixed phi, be sure to change Rp = r_core below and rad_evol = False
 RR = True
 eps = 0.15
 rad_evol = True
 Rp_override = False
 n_steps = int(1e5)
-n_atmodeller = int(0)
+n_atmodeller = int(1e4)
 thermal = True
 M_atm = Mp*f_atm # initial atmospheric mass [kg]
 melt_fraction_override = False
 save_molecules = False
 # mantle_iron_dict = {'type': 'static', 'Fe_mass_fraction': 0.1}
 mantle_iron_dict = False
-dynamic_phi = False
-OtoH_enhancement = 100
+dynamic_phi = True
+OtoH_enhancement = 1
 OtoH_enhanced = OtoH_protosolar*OtoH_enhancement
 OtoH_enhanced_mass = OtoH_enhanced*(mu_O/mu_H)
 
@@ -292,25 +318,27 @@ if n_atmodeller != 0:
     x_SO2 = n_SO2/n_total_atm
     N_tot = N_H + N_He + N_D + N_O + N_C + N_N + N_S
     N_tot_molecular = (n_H2O + n_H2 + n_O2 + n_CO + n_CO2 + n_N2 + n_S2 + n_H2O4S + n_SO2 + n_CH4)*avogadro + NHe_a[-1]
-    x_H = N_H/N_tot
-    x_He = N_He/N_tot
+
+    #### This is all wrong, you need to fix with the actual output. You're just using initial conditions here.
+    # x_H = N_H/N_tot
+    # x_He = N_He/N_tot
     x_He_molecular = NHe_a[-1]/N_tot_molecular
-    x_D = N_D/N_tot
-    x_O = N_O/N_tot
-    x_C = N_C/N_tot
-    x_N = N_N/N_tot
-    x_S = N_S/N_tot
-    print('x_H2O =', x_H2O)
-    print('x_H2 =', x_H2)
-    print('x_He =', x_He_molecular)
-    print('x_O2 =', x_O2)
-    print('x_CO2 =', x_CO2)
-    print('x_CO =', x_CO)
-    print('x_CH4 =', x_CH4)
-    print('x_N2 =', x_N2)
-    print('x_S2 =', x_S2)
-    print('x_H2O4S =', x_H2O4S)
-    print('x_SO2 =', x_SO2)
+    # x_D = N_D/N_tot
+    # x_O = N_O/N_tot
+    # x_C = N_C/N_tot
+    # x_N = N_N/N_tot
+    # x_S = N_S/N_tot
+    # print('x_H2O =', x_H2O)
+    # print('x_H2 =', x_H2)
+    # print('x_He =', x_He_molecular)
+    # print('x_O2 =', x_O2)
+    # print('x_CO2 =', x_CO2)
+    # print('x_CO =', x_CO)
+    # print('x_CH4 =', x_CH4)
+    # print('x_N2 =', x_N2)
+    # print('x_S2 =', x_S2)
+    # print('x_H2O4S =', x_H2O4S)
+    # print('x_SO2 =', x_SO2)
 # calculate mass fraction of He
 
 Y = NHe_a*mu_He/(NH_a*mu_H + NHe_a*mu_He + ND_a*mu_D + NO_a*mu_O + NC_a*mu_C)
@@ -543,9 +571,9 @@ print('done (', round((TIME.time() - start)/60, 2), 'mins )')
 
 # path = '/Users/collin/Documents/Harvard/Research/atm_escape/IsoFATE/case_studies/LHS1140b_eps80_f0018_Fi1_tjump_Ffinal170_XUV+RR_atmod1e2_ntime1e5_t5e9_tpms0'
 # path = '/Users/collin/Documents/Harvard/Research/atm_escape/IsoFATE/case_studies/N2world_dynamic_phi_fatm0398_XUV+RR_atmod1e2_ntime1e5_t5e9_tpms0'
-# path = '/Users/collin/Documents/Harvard/Research/atm_escape/IsoFATE/case_studies/HAT-P-11b_fatm12_aphelion_XUV+RR_atmod0_ntime1e5_tsat1e8_tpms0'
-
+# path = '/Users/collin/Documents/Harvard/Research/atm_escape/IsoFATE/case_studies/HAT-P-11b_fatm18_aphelion_XUV+RR_atmod0_ntime1e5_tsat1e9_tpms0'
 # plt.savefig(path+'.png', dpi = 300, bbox_inches = 'tight')
+
 
 # with open(path, 'wb') as file:
 #     pickle.dump(sol, file)

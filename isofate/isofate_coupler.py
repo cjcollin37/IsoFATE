@@ -12,8 +12,9 @@ from isofate.orbit_params import *
 from atmodeller import InteriorAtmosphere
 from atmodeller import Species
 from atmodeller import SpeciesCollection
-# from atmodeller.atmodeller.solubility import get_solubility_models
+from atmodeller.solubility import get_solubility_models
 solubility_models = get_solubility_models()
+
 
 def isocalc(f_atm, Mp, Mstar, F0, Fp, T, d, time = 5e9, mechanism = 'XUV', rad_evol = True,
 N_H = 0, N_He = 0, N_D = 0, N_O = 0, N_C = 0, N_N = 0, N_S = 0, melt_fraction_override = False,
@@ -143,10 +144,9 @@ dynamic_phi = False):
     SO2_g = Species.create_gas("SO2")
 
     species = SpeciesCollection((H2_g, H2O_g, O2_g, CO_g, CO2_g, CH4_g, He_g, N2_g, S2_g, H2O4S_g, SO2_g))
-
     interior_atmosphere = InteriorAtmosphere(species)
+    atmod_full_output = {} # dictionary to store atmodeller full output
 
-    atmod_full_output = {}
     if mantle_iron_dict:
         mantle_iron_dict['mantle_mass'] = 0.704665308539034*Mp # fraction from atmodeller
         mantle_iron_dict['mass_Fe'] = mantle_iron_dict['mantle_mass']*mantle_iron_dict['Fe_mass_fraction']

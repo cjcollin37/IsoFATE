@@ -246,7 +246,7 @@ def phiE_CP(Teq, Mp, rho_rcb, eps, Vpot, area, mu, R_env):
 
     c_s = np.sqrt(kb*Teq/mu_H) # sound speed [m/s]
     R_rcb = R_c + R_env # rcb radius [m]
-    phi_B = c_s*rho_rcb*np.exp(-G*Mp/(c_s**2*R_rcb)) # Bondi-limited escape (eq 10 Gupta & Schlichting 2020)
+    phi_B = c_s*rho_rcb*np.exp(-G*Mp/(c_s**2*R_rcb)) # Bondi-limited escape (eq 10 Gupta & Schlichting 2020; eq 26 Ginzburg et al. 2016)
 
     return min(phi_L, phi_B)
 
