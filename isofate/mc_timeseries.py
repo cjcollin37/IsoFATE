@@ -7,7 +7,8 @@ Usage:
 
 Every shard draws the same N planets from the seed and runs planets I, I + K, I + 2K, ...; --shard defaults to
 AWS_BATCH_JOB_ARRAY_INDEX. OUT.npz holds one row per planet: its index, its parameters, and each time series
-sampled at the Atmodeller steps, with NaN rows for planets that failed.
+sampled at the Atmodeller steps, with NaN rows for planets that failed. A shard keeps its rows in memory (about
+0.2 MB per planet) and writes them when it finishes, so size shards to a few thousand planets.
 
 --pin (Linux) runs each worker on a CPU of its own, which cuts the time per planet by about 40%. Use it only when
 the job has its CPUs to itself: workers of jobs sharing a machine would pin to the same CPUs.
