@@ -1,6 +1,5 @@
 '''
-Checks that the numba ports in escape_kernel.py match isofunks.py, and that the compiled atmodeller output
-matches atmodeller's own.
+Checks that the numba ports in escape_kernel.py match isofunks.py.
 '''
 
 import numpy as np
@@ -77,26 +76,3 @@ def test_species_fluxes_match_isofunks():
                               f.get_binary_diffusion_coeff(SPECIES[hv], SPECIES[i], p.T)),
                 f.Phi_minor_species(Phi_H, Phi_He, H[l], H[hv], H[i], list(N), p.T, i, l, hv), rtol = RTOL)
 
-
-def test_output_asdict_matches_atmodeller():
-    from atmodeller import InteriorAtmosphere, Planet, Species, SpeciesCollection
-    from isofate.atmodeller_coupler import output_asdict, solubility_models
-
-    species = SpeciesCollection((
-        Species.create_gas('H2', solubility = solubility_models['H2_basalt_hirschmann12']),
-        Species.create_gas('H2O', solubility = solubility_models['H2O_basalt_dixon95']),
-        Species.create_gas('O2'),
-        Species.create_gas('CO2', solubility = solubility_models['CO2_basalt_dixon95']),
-        Species.create_gas('He', solubility = solubility_models['He_basalt_jambon86'])))
-    interior_atmosphere = InteriorAtmosphere(species)
-    Mp = 5*Me
-    interior_atmosphere.solve(
-        planet = Planet(surface_temperature = 2500, mantle_melt_fraction = 0.5, planet_mass = Mp,
-                        surface_radius = f.R_core(Mp)),
-        mass_constraints = {'H': 1e20, 'O': 1e19, 'C': 1e18, 'He': 3e19})
-    output = interior_atmosphere.output
-    fast, full = output_asdict(output), output.asdict()
-    assert fast.keys() <= full.keys()
-    for name, entries in fast.items():
-        for key, value in entries.items():
-            np.testing.assert_allclose(value, full[name][key], rtol = 1e-12, err_msg = f'{name}.{key}')

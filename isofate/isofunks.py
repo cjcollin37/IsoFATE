@@ -757,8 +757,25 @@ def make_atmosphere_descent(Tem, mu, rplanet, Mc, gamma, output_mode):
     Outputs: see below
     '''
     
+    Matm, T, p = atmosphere_descent(Tem, mu, rplanet, Mc, R_core(Mc), gamma)
+
+    # integer variable 'output_mode' sets what we output
+    if output_mode==0:
+        return Matm, T, p
+    elif output_mode==1:
+        return Matm
+    else:
+        Tsurf = T[0]
+        psurf = p[0]
+        return Tsurf,psurf
+
+def atmosphere_descent(Tem, mu, rplanet, Mc, rc, gamma):
+    '''
+    make_atmosphere_descent for core radius rc, in a form Numba can compile.
+    Outputs: Matm, T, p
+    '''
+
     nr = 250 # resolution of radius grid
-    rc = R_core(Mc)
     pem = 0.2e5
     K = (gamma - 1)/gamma
 
@@ -803,16 +820,8 @@ def make_atmosphere_descent(Tem, mu, rplanet, Mc, gamma, output_mode):
         # update m
         dm = 4*np.pi*r[i]**2*rho[i]*dr
         Matm += dm
-    
-    # integer variable 'output_mode' sets what we output
-    if output_mode==0:
-        return Matm, T, p
-    elif output_mode==1:
-        return Matm
-    else:
-        Tsurf = T[0]
-        psurf = p[0]
-        return Tsurf,psurf
+
+    return Matm, T, p
 
 def rplanet_fn(Teq, mu, Mc, gamma, Matm):
     

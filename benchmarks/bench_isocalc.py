@@ -17,6 +17,7 @@ import numpy as np
 
 from isofate.constants import *
 from isofate.isofate_coupler import isocalc
+from isofate.mc_timeseries import isocalc_args
 from isofate.orbit_params import Luminosity, EqTemp, Insolation, SemiMajor
 
 
@@ -60,6 +61,7 @@ SCENARIOS = {
     'escape_atm_lost': lambda: GJ3090b(),
     'coupled_1e4': lambda: LHS1140b(n_atmodeller = int(1e4), dynamic_phi = True),
     'coupled_1e3': lambda: LHS1140b(n_atmodeller = int(1e3), dynamic_phi = True),
+    'mc_timeseries': lambda: isocalc_args(P = 20/s2day, Mp = 5*Me, f_atm = 0.02, OtoH_enhancement = 1),
 }
 
 

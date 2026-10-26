@@ -11,11 +11,6 @@ from isofate.isofunks import *
 from isofate.orbit_params import *
 from isofate import escape_kernel
 from isofate.escape_kernel import FluxModel, Mechanism
-from atmodeller import InteriorAtmosphere
-from atmodeller import Species
-from atmodeller import SpeciesCollection
-from atmodeller.solubility import get_solubility_models
-solubility_models = get_solubility_models()
 
 
 def isocalc(f_atm, Mp, Mstar, F0, Fp, T, d, time = 5e9, mechanism = 'XUV', rad_evol = True,
@@ -142,12 +137,13 @@ dynamic_phi = False):
         elif flux_model == 'Johnstone':
             F_track = np.asarray(Fxuv_Johnstone(t_a, d, stellar_type), dtype=float)
 
+    # mechanism and flux_model as plain ints: Numba checks IntEnum arguments slowly on every kernel call
     params = escape_kernel.Params(
         Mp=float(Mp), Mstar=float(Mstar), F0=float(F0), Fp=float(Fp), T=float(T), d=float(d), delta_t=float(delta_t),
         t_total=float(t), t0=float(t0*s2yr), t_sat=float(t_sat), beta=float(beta), step_fn=step_fn == True,
         F_final=float(F_final), t_pms=float(t_pms), pms_factor=float(pms_factor), eps=float(eps), rho_rcb=float(rho_rcb),
         RR=RR == True, thermal=thermal == True, rad_evol=rad_evol != False, dynamic_phi=dynamic_phi == True,
-        mechanism=mechanisms[mechanism], flux_model=flux_models.get(flux_model, FluxModel.POWER_LAW),
+        mechanism=int(mechanisms[mechanism]), flux_model=int(flux_models.get(flux_model, FluxModel.POWER_LAW)),
         r_core=float(radius_core),
         r_fixed=float(Rp_override) if rad_evol == False and Rp_override != False else float(radius_core),
         R_B=float(R_B), R_H=float(R_H))
@@ -158,20 +154,7 @@ dynamic_phi = False):
     X_DH = N_D/(N_H + N_D) if N_H + N_D != 0 else 0 # ignores D in mantle
 
     if n_atmodeller != 0:
-        H2O_g = Species.create_gas("H2O", solubility=solubility_models["H2O_basalt_dixon95"])
-        H2_g = Species.create_gas("H2", solubility=solubility_models["H2_basalt_hirschmann12"])
-        O2_g = Species.create_gas("O2")
-        CO_g = Species.create_gas("CO", solubility=solubility_models["CO_basalt_yoshioka19"])
-        CO2_g = Species.create_gas("CO2", solubility=solubility_models["CO2_basalt_dixon95"])
-        CH4_g = Species.create_gas("CH4", solubility=solubility_models["CH4_basalt_ardia13"])
-        He_g = Species.create_gas("He", solubility=solubility_models["He_basalt_jambon86"])
-        N2_g = Species.create_gas("N2", solubility=solubility_models["N2_basalt_libourel03"])
-        S2_g = Species.create_gas("S2", solubility=solubility_models["S2_sulfide_basalt_boulliung23"])
-        H2O4S_g = Species.create_gas("H2O4S")
-        SO2_g = Species.create_gas("SO2")
-
-        species = SpeciesCollection((H2_g, H2O_g, O2_g, CO_g, CO2_g, CH4_g, He_g, N2_g, S2_g, H2O4S_g, SO2_g))
-        interior_atmosphere = InteriorAtmosphere(species)
+        atmodeller_solver = AtmodellerSolver()
     atmod_full_output = {} # dictionary to store atmodeller full output
 
     if mantle_iron_dict:
@@ -245,7 +228,7 @@ dynamic_phi = False):
         if n == n_steps - 1:
             # atmod_full_output = {}
             atmod_sol = AtmodellerCoupler(T, Mp, radius_p, mu, melt_fraction_override, mantle_iron_dict,
-                                              y1+y3, y2, y4, y5, y6, y7, N_H_int+N_D_int, N_He_int, N_O_int, N_C_int, N_N_int, N_S_int, interior_atmosphere)[1]
+                                              y1+y3, y2, y4, y5, y6, y7, N_H_int+N_D_int, N_He_int, N_O_int, N_C_int, N_N_int, N_S_int, atmodeller_solver)[1]
             atmod_full_output['H2O_atm'] = atmod_sol['H2O_g']['atmosphere_moles'][0]
             atmod_full_output['H2O_mantle'] = atmod_sol['H2O_g']['dissolved_moles'][0]
             atmod_full_output['H2_atm'] = atmod_sol['H2_g']['atmosphere_moles'][0]
@@ -270,7 +253,7 @@ dynamic_phi = False):
             atmod_full_output['log10dIW_1_bar'] = atmod_sol['O2_g']['log10dIW_1_bar'][0]
         if n%n_atmodeller == 0: # run atmodeller every n_atmodeller steps.
             atmod_results, atmod_full, mantle_iron_dict = AtmodellerCoupler(T, Mp, radius_p, mu, melt_fraction_override, mantle_iron_dict,
-                                              y1+y3, y2, y4, y5, y6, y7, N_H_int+N_D_int, N_He_int, N_O_int, N_C_int, N_N_int, N_S_int, interior_atmosphere)
+                                              y1+y3, y2, y4, y5, y6, y7, N_H_int+N_D_int, N_He_int, N_O_int, N_C_int, N_N_int, N_S_int, atmodeller_solver)
             N_H_int = atmod_results['N_H_int']*(1 - X_DH)
             N_D_int = atmod_results['N_H_int']*X_DH
             N_He_int = atmod_results['N_He_int']

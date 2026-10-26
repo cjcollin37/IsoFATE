@@ -3,15 +3,19 @@ Monte Carlo time series of IsoFATE-Atmodeller coupled planets around an M1 star.
 
 Usage:
     python -m isofate.mc_timeseries OUT.npz [--n-planets N] [--seed S] [--shard I] [--n-shards K] [--workers W]
+                                    [--pin]
 
 Every shard draws the same N planets from the seed and runs planets I, I + K, I + 2K, ...; --shard defaults to
 AWS_BATCH_JOB_ARRAY_INDEX. OUT.npz holds one row per planet: its index, its parameters, and each time series
 sampled at the Atmodeller steps, with NaN rows for planets that failed.
+
+--pin (Linux) runs each worker on a CPU of its own, which cuts the time per planet by about 40%. Use it only when
+the job has its CPUs to itself: workers of jobs sharing a machine would pin to the same CPUs.
 '''
 
 import os
 
-os.environ.setdefault('XLA_FLAGS', '--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1')
+os.environ.setdefault('NPROC', '1') # XLA CPU thread pool size
 
 import argparse
 import multiprocessing as mp
@@ -48,12 +52,10 @@ def draw_planets(n, seed):
             'OtoH_enhancement': np.ones(n)} # O/H relative to protosolar
 
 
-def simulate(P, Mp, f_atm, OtoH_enhancement):
+def isocalc_args(P, Mp, f_atm, OtoH_enhancement):
     '''
-    Sampled time series of one planet, keyed as SERIES.
+    isocalc arguments and keyword arguments for one planet.
     '''
-    from isofate.isofate_coupler import isocalc
-
     L = Luminosity(R_STAR, T_STAR) # stellar luminosity [W]
     d = SemiMajor(M_STAR, P) # orbital distance [m]
     Fp = Insolation(L, d) # planetary insolation [W/m2]
@@ -72,14 +74,30 @@ def simulate(P, Mp, f_atm, OtoH_enhancement):
     mu_avg = (N_H*mu_H + N_He*mu_He + N_D*mu_D + N_O*mu_O + N_C*mu_C + N_N*mu_N + N_S*mu_S)/(
         N_H + N_He + N_D + N_O + N_C + N_N + N_S)
 
-    sol = isocalc(f_atm, Mp, M_STAR, F0, Fp, Teq, d, 5e9, 'XUV', True,
-                  N_H, N_He, N_D, N_O, N_C, N_N, N_S, melt_fraction_override = False,
-                  mu = mu_avg, eps = 0.15, activity = 'medium', flux_model = 'power law', stellar_type = 'M1',
-                  Rp_override = False, t_sat = 5e8, step_fn = False, F_final = 0, t_pms = 0, pms_factor = 1e2,
-                  n_steps = N_STEPS, t0 = 1e6, rho_rcb = 1.0, RR = True,
+    args = (f_atm, Mp, M_STAR, F0, Fp, Teq, d, 5e9, 'XUV', True, N_H, N_He, N_D, N_O, N_C, N_N, N_S)
+    kwargs = dict(melt_fraction_override = False, mu = mu_avg, eps = 0.15, activity = 'medium',
+                  flux_model = 'power law', stellar_type = 'M1', Rp_override = False, t_sat = 5e8, step_fn = False,
+                  F_final = 0, t_pms = 0, pms_factor = 1e2, n_steps = N_STEPS, t0 = 1e6, rho_rcb = 1.0, RR = True,
                   thermal = True, beta = -1.23, n_atmodeller = N_ATMODELLER, save_molecules = True,
                   mantle_iron_dict = False)
+    return args, kwargs
+
+
+def simulate(**planet):
+    '''
+    Sampled time series of one planet, keyed as SERIES.
+    '''
+    from isofate.isofate_coupler import isocalc
+
+    args, kwargs = isocalc_args(**planet)
+    sol = isocalc(*args, **kwargs)
     return {name: sol[key][SAMPLES]*scale for name, (key, scale) in SERIES.items()}
+
+
+def _pin(cpus, counter):
+    with counter.get_lock():
+        os.sched_setaffinity(0, {cpus[counter.value % len(cpus)]})
+        counter.value += 1
 
 
 def _run(task):
@@ -99,6 +117,7 @@ def main():
     parser.add_argument('--shard', type = int, default = int(os.environ.get('AWS_BATCH_JOB_ARRAY_INDEX', 0)))
     parser.add_argument('--n-shards', type = int, default = 1)
     parser.add_argument('--workers', type = int, default = 1)
+    parser.add_argument('--pin', action = 'store_true')
     options = parser.parse_args()
     if not 0 <= options.shard < options.n_shards:
         parser.error(f'--shard must be in [0, {options.n_shards})')
@@ -110,10 +129,14 @@ def main():
     series = {name: np.full((len(indices), len(SAMPLES)), np.nan) for name in SERIES}
 
     start = time.perf_counter()
+    context = mp.get_context('spawn')
+    pin = (sorted(os.sched_getaffinity(0)), context.Value('i', 0)) if options.pin else None
     if options.workers > 1:
-        pool = mp.get_context('spawn').Pool(options.workers)
+        pool = context.Pool(options.workers, _pin if pin else None, pin or ())
         results = pool.imap_unordered(_run, tasks)
     else:
+        if pin:
+            _pin(*pin)
         pool = None
         results = map(_run, tasks)
     for done, (i, result) in enumerate(results, 1):
