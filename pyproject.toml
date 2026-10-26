@@ -11,7 +11,8 @@ dependencies = [
  "numpy==2.3",
  "scipy==1.16.1",
  "matplotlib==3.10.0",
- "atmodeller>=0.7.0",
+ "atmodeller==0.9.1",
+ "numba>=0.62",
  "optimistix==0.0.10",
  "emcee",
  "corner"
@@ -23,6 +24,11 @@ include = ["isofate*"]
 
 [tool.setuptools.package-data]
 isofate = ["data/**/*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
 
 #[tool.setuptools]
 #include-package-data = true

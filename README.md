@@ -24,7 +24,7 @@ There are no formal tutorials for IsoFATE yet, but there will be soon! Please co
 
 Run sim.py to get things up and running quickly.
 
-The engine of the code is in the ```isocalc``` function in isofate_coupler.py. Files "constants.py," "isofunks.py," and "orbit_params.py" contain physical constants and supporting functions. Atmodeller is called with atmodeller_coupler.py.
+The engine of the code is in the ```isocalc``` function in isofate_coupler.py. Files "constants.py," "isofunks.py," and "orbit_params.py" contain physical constants and supporting functions. Atmodeller is called with atmodeller_coupler.py. Each timestep of ```isocalc``` runs in escape_kernel.py, which Numba compiles on the first call in each Python session (a few seconds); its physics must stay in step with isofunks.py, which tests/test_escape_kernel.py checks.
 
 ## Citation
 
