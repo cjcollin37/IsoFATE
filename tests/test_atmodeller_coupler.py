@@ -52,6 +52,20 @@ def test_atmodeller_solver_falls_back_to_atmodeller():
     assert_matches(sol, atmodeller_asdict(planet, mass_constraints(1.0)))
 
 
+def test_atmodeller_coupler_conserves_atoms():
+    # isocalc feeds the atom numbers of each call into the next, so any loss or gain compounds with every call
+    Mp = 5*Me
+    elements = ('H', 'He', 'O', 'C', 'N', 'S')
+    numbers = np.array([1e20/mu_H, 3e19/mu_He, 1e19/mu_O, 1e18/mu_C, 1e17/mu_N, 1e10/mu_S])
+    atm, dissolved = numbers, np.zeros(len(elements))
+    solver = ac.AtmodellerSolver()
+    for _ in range(3):
+        results = ac.AtmodellerCoupler(1000, Mp, 2*f.R_core(Mp), 2.3*mu_H, 0.5, False, *atm, *dissolved, solver)[0]
+        atm = np.array([results[f'N_{element}_atm'] for element in elements])
+        dissolved = np.array([results[f'N_{element}_int'] for element in elements])
+        np.testing.assert_allclose(atm + dissolved, numbers, rtol = 1e-12)
+
+
 def test_surface_temperature_matches_isofunks():
     rng = np.random.default_rng(0)
     for _ in range(2000):

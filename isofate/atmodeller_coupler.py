@@ -55,6 +55,11 @@ with importlib.resources.as_file(
     MELT_TEMP_GRID = _data['temp_grid'].astype(float) # [K]
     MELT_FRACTION_GRID = np.ascontiguousarray(_data['psi_grid'].T) # [mass, temperature]
 
+# atomic masses Atmodeller converts mass constraints to atom numbers with [kg/atom]. IsoFATE's mu_X differ by up to
+# 1e-4, so using them here would add that fraction of each element's inventory on every Atmodeller call.
+ATOM_MASS = {element: Formula(element).mass*unit_conversion.g_to_kg/AVOGADRO
+             for element in ('H', 'He', 'O', 'C', 'N', 'S')}
+
 
 def isofate_species():
     '''
@@ -118,13 +123,13 @@ def AtmodellerCoupler(Teq, Mp, Rp, mu, melt_fraction, mantle_iron_dict,
     elif melt_fraction == False:
         mantle_melt_fraction: float = melt_fraction_from_grid(Mp, min(max(T_surface, 10.0), 16000.0))
 
-    # element masses
-    mass_H: float = (N_H_atm + N_H_int)*mu_H
-    mass_O: float = (N_O_atm + N_O_int)*mu_O
-    mass_C: float = (N_C_atm + N_C_int)*mu_C
-    mass_He: float = (N_He_atm + N_He_int)*mu_He
-    mass_N: float = (N_N_atm + N_N_int)*mu_N
-    mass_S: float = (N_S_atm + N_S_int)*mu_S
+    # element masses, in Atmodeller's atomic masses so the atom numbers it returns add up to the ones passed in
+    mass_H: float = (N_H_atm + N_H_int)*ATOM_MASS['H']
+    mass_O: float = (N_O_atm + N_O_int)*ATOM_MASS['O']
+    mass_C: float = (N_C_atm + N_C_int)*ATOM_MASS['C']
+    mass_He: float = (N_He_atm + N_He_int)*ATOM_MASS['He']
+    mass_N: float = (N_N_atm + N_N_int)*ATOM_MASS['N']
+    mass_S: float = (N_S_atm + N_S_int)*ATOM_MASS['S']
     mass_constraints = {
         "H": mass_H,
         "O": mass_O,
