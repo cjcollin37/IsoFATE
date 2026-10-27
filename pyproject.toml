@@ -26,3 +26,9 @@ isofate = ["data/**/*"]
 
 #[tool.setuptools]
 #include-package-data = true
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
