@@ -458,22 +458,37 @@ if len(cross[0]) != 0:
 #ax2.set_xlabel('time [yr]')
 
 # N_x
-ax3.plot(t_a*s2yr, NH_a/avogadro, color = 'black', label = 'N$_{H}$')
-# ax3.set_xlabel('Time [yr]')
-if len(cross[0]) != 0:
-    ax3.axvline(t_a[cross][0]*s2yr, ls = '--', lw = 0.5, color = 'coral')
-if NHe_a[0] != 0:
-    ax3.plot(t_a*s2yr, NHe_a/avogadro, color = 'grey', label = 'N$_{He}$')
-if ND_a[0] != 0:
-    ax3.plot(t_a*s2yr, ND_a/avogadro, color = 'orangered', label = 'N$_D$')
-if NO_a[0] != 0:
-    ax3.plot(t_a*s2yr, NO_a/avogadro, color = 'green', label = 'N$_{O}$')
-if NC_a[0] != 0:
-    ax3.plot(t_a*s2yr, NC_a/avogadro, color = 'gold', label = 'N$_{C}$')
-if NN_a[0] != 0:
-    ax3.plot(t_a*s2yr, NN_a/avogadro, color = 'blue', label = 'N$_{N}$')
-if NS_a[0] != 0:
-    ax3.plot(t_a*s2yr, NS_a/avogadro, color = 'purple', label = 'N$_{S}$')
+if save_molecules == True:
+    ax3.plot(t_a*s2yr, NHe_a/avogadro, color = 'grey', label = 'He')
+    ax3.plot(t_a*s2yr, sol['n_H2_a'], color = 'black', label = 'H$_2$')
+    ax3.plot(t_a*s2yr, sol['n_H2O_a'], color = 'skyblue', label = 'H$_2$O')
+    ax3.plot(t_a*s2yr, sol['n_O2_a'], color = 'green', label = 'O$_2$')
+    ax3.plot(t_a*s2yr, sol['n_CO2_a'], color = 'gold', label = 'CO$_2$')
+    ax3.plot(t_a*s2yr, sol['n_CO_a'], color = 'orange', label = 'CO')
+    ax3.plot(t_a*s2yr, sol['n_CH4_a'], color = 'brown', label = 'CH$_4$')
+    ax3.plot(t_a*s2yr, sol['n_N2_a'], color = 'blue', label = 'N$_2$')
+    ax3.plot(t_a*s2yr, sol['n_S2_a'], color = 'purple', label = 'S$_2$')
+    ax3.plot(t_a*s2yr, sol['n_H2O4S_a'], color = 'pink', label = 'H$_2$SO$_4$')
+    ax3.plot(t_a*s2yr, sol['n_SO2_a'], color = 'violet', label = 'SO$_2$')
+    if len(cross[0]) != 0:
+        ax3.axvline(t_a[cross][0]*s2yr, ls = '--', lw = 0.5, color = 'coral')
+else:
+    ax3.plot(t_a*s2yr, NH_a/avogadro, color = 'black', label = 'N$_{H}$')
+    # ax3.set_xlabel('Time [yr]')
+    if len(cross[0]) != 0:
+        ax3.axvline(t_a[cross][0]*s2yr, ls = '--', lw = 0.5, color = 'coral')
+    if NHe_a[0] != 0:
+        ax3.plot(t_a*s2yr, NHe_a/avogadro, color = 'grey', label = 'N$_{He}$')
+    if ND_a[0] != 0:
+        ax3.plot(t_a*s2yr, ND_a/avogadro, color = 'orangered', label = 'N$_D$')
+    if NO_a[0] != 0:
+        ax3.plot(t_a*s2yr, NO_a/avogadro, color = 'green', label = 'N$_{O}$')
+    if NC_a[0] != 0:
+        ax3.plot(t_a*s2yr, NC_a/avogadro, color = 'gold', label = 'N$_{C}$')
+    if NN_a[0] != 0:
+        ax3.plot(t_a*s2yr, NN_a/avogadro, color = 'blue', label = 'N$_{N}$')
+    if NS_a[0] != 0:
+        ax3.plot(t_a*s2yr, NS_a/avogadro, color = 'purple', label = 'N$_{S}$')
 # if mechanism == 'fix phi subcritical' or mechanism == 'fix phi supercritical':
 #     ax3.loglog(t_a*s2yr, N1(t_a, A, Phi, N1_0)/avogadro, '--', color = 'skyblue', zorder = 10, label = 'analytic N$_{H}$') # changed H_0 to N1_0
 #     ax3.legend(shadow = True)
