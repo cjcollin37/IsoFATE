@@ -76,7 +76,10 @@ def b_H_D(T):
 def b_H_He(T):
     return 1.04e20*T**0.732 # [molecules/m/s] from Mason & Marrero 1970 for H in He
 def b_He_D(T):
-    return 5.087e19*T**0.728 # [molecules/m/s] approximated from b_H_D using Genda/Ikoma 2008 prescription (Appendix C)
+    # b_H_He scaled from H to D by sqrt(reduced mass): He-H and He-D share one interaction potential, the way Genda &
+    # Ikoma 2008 (Appendix C) get b_H_D from b_H_H. No measured He-D value is known. Until 2026-10-30 this was b_H_D
+    # scaled to He-D, 5.087e19*T**0.728, 1.62x smaller, as if He-D collided like H-D
+    return 8.062e19*T**0.732 # [molecules/m/s] from Mason & Marrero 1970 for H in He, isotope-scaled to D
 def b_H_O(T):
     return 4.8e19*T**0.75 # [molecules/m/s] from Wordsworth et al 2018
 def b_He_O(T):

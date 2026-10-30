@@ -328,7 +328,7 @@ def Phi_D_GC23(Phi_H, Phi_He, H_H, H_D, H_He, N_H, N_He, N_D, T):
     '''
     b_H_D = 7.183e19*T**0.728 # [molecules/m/s] from Genda & Ikoma 2008 for D in H (not measured directly)
     b_H_He = 1.04e20*T**0.732 # [molecules/m/s] from Mason & Marrero 1970 for H in He
-    b_He_D = 5.087e19*T**0.728 # [molecules/m/s] approximated from b_H_D using Genda/Ikoma 2008 prescription
+    b_He_D = 8.062e19*T**0.732 # [molecules/m/s] b_H_He scaled from H to D by the reduced mass (constants.b_He_D)
     alpha_2 = b_H_D/b_H_He
     alpha_3 = b_H_D/b_He_D
     Phi_DL_D = b_H_D*(1/H_D - 1/H_H)
@@ -357,7 +357,7 @@ def Phi_D_Z90(Phi_H, Phi_He, H_H, H_D, H_He, N_H, N_He, N_D, N_O, N_C, N_N, N_S,
         return 0
     b_H_D = 7.183e19*T**0.728 # [molecules/m/s] from Genda & Ikoma 2008 for D in H (not measured directly)
     b_H_He = 1.04e20*T**0.732 # [molecules/m/s] from Mason & Marrero 1970 for H in He
-    b_He_D = 5.087e19*T**0.728 # [molecules/m/s] approximated from b_H_D using Genda/Ikoma 2008 prescription (Appendix C)
+    b_He_D = 8.062e19*T**0.732 # [molecules/m/s] b_H_He scaled from H to D by the reduced mass (constants.b_He_D)
     alpha_2 = b_H_D/b_H_He
     alpha_3 = b_H_D/b_He_D
     Phi_DL_D = b_H_D*(1/H_D - 1/H_H)
@@ -386,7 +386,7 @@ def Phi_D_Z90_mod2(Phi_H, Phi_He, H_H, H_D, H_He, N_H, N_He, N_D, T):
     '''
     b_H_D = 7.183e19*T**0.728 # [molecules/m/s] from Genda & Ikoma 2008 for D in H (not measured directly)
     b_H_He = 1.04e20*T**0.732 # [molecules/m/s] from Mason & Marrero 1970 for H in He
-    b_He_D = 5.087e19*T**0.728 # [molecules/m/s] approximated from b_H_D using Genda/Ikoma 2008 prescription (Appendix C)
+    b_He_D = 8.062e19*T**0.732 # [molecules/m/s] b_H_He scaled from H to D by the reduced mass (constants.b_He_D)
     alpha_3 = b_H_D/b_He_D
     Phi_DL_D = b_H_D/H_D
     Phi_DL_He = b_H_He/H_He

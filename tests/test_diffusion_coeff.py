@@ -43,11 +43,12 @@ def test_symmetric_and_tabulated(T):
 
 def test_He_D_is_not_H_He():
     '''
-    Checks that the He-D pair gets b_He_D, less than half of b_H_He. A look-up that sorts the pair to ('D', 'He')
-    misses the table and silently returns b_H_He instead.
+    Checks that the He-D pair gets b_He_D, which is b_H_He scaled by the reduced mass (0.775 b_H_He), not b_H_He
+    itself: a look-up that sorts the pair to ('D', 'He') misses the table and silently returns b_H_He instead.
     '''
-    assert f.get_binary_diffusion_coeff('He', 'D', 226.0) == b_He_D(226.0)
-    assert f.get_binary_diffusion_coeff('He', 'D', 226.0) < 0.5*b_H_He(226.0)
+    b = f.get_binary_diffusion_coeff('He', 'D', 226.0)
+    assert b == b_He_D(226.0) and b != b_H_He(226.0)
+    np.testing.assert_allclose(b/b_H_He(226.0), np.sqrt(reduced('H', 'He')/reduced('He', 'D')), rtol = 1e-3)
 
 
 def test_untabulated_pairs_follow_reduced_mass_scaling():
@@ -63,13 +64,15 @@ def test_untabulated_pairs_follow_reduced_mass_scaling():
         np.testing.assert_allclose(f.get_binary_diffusion_coeff(s1, s2, T), expected, rtol = 1e-12)
     # the same scaling reproduces the approximated coefficients of constants.py to within 2.5%. Skipped: the
     # literature values (b_H_D from Genda & Ikoma 2008, b_H_He from Mason & Marrero 1970, b_H_O from Wordsworth
-    # et al 2018) and b_He_D, which was scaled from b_H_D, not from b_H_O
+    # et al 2018) and b_He_D, which is scaled from b_H_He, not from b_H_O
     for (s1, s2), func in TABULATED.items():
         if func in (b_H_D, b_H_He, b_H_O, b_He_D):
             continue
         np.testing.assert_allclose(b_H_O(T)*np.sqrt(reduced('H', 'O')/reduced(s1, s2)), func(T), rtol = 0.025)
-    # and b_He_D from b_H_D, to 0.1%
-    np.testing.assert_allclose(b_H_D(T)*np.sqrt(reduced('H', 'D')/reduced('He', 'D')), b_He_D(T), rtol = 1e-3)
+    # and b_He_D is b_H_He scaled from H to D by the reduced mass (the same He-H interaction potential), to 0.1%,
+    # at every temperature (the same T^0.732)
+    for T in (100.0, 226.0, 1000.0, 3000.0): # [K]
+        np.testing.assert_allclose(b_H_He(T)*np.sqrt(reduced('H', 'He')/reduced('He', 'D')), b_He_D(T), rtol = 1e-3)
 
 
 def test_identical_and_unknown_species():
