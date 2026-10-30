@@ -506,36 +506,49 @@ def Phi_S_Z90(Phi_H, Phi_He, H_H, H_N, H_He, N_H, N_He, N_D, N_O, N_C, N_N, N_S,
     denom = 1 + alpha_3*f_He
     return max(0, f_S*num/denom)
 
+# binary diffusion coefficients tabulated in constants.py, one entry per pair (looked up in either order)
+_b_functions = {
+    ('H', 'D'): b_H_D,
+    ('H', 'He'): b_H_He,
+    ('H', 'O'): b_H_O,
+    ('H', 'C'): b_H_C,
+    ('H', 'N'): b_H_N,
+    ('H', 'S'): b_H_S,
+    ('He', 'D'): b_He_D,
+    ('He', 'O'): b_He_O,
+    ('He', 'C'): b_He_C,
+    ('He', 'N'): b_He_N,
+    ('He', 'S'): b_He_S
+}
+_molar_masses = {'H': M_H, 'D': M_D, 'He': M_He, 'O': M_O, 'C': M_C, 'N': M_N, 'S': M_S} # [kg/mol]
+
 def get_binary_diffusion_coeff(species1, species2, T):
     '''
-    Get binary diffusion coefficient between two species at temperature T
-    Always returns b_light_heavy regardless of input order
+    Gets the binary diffusion coefficient between two species at temperature T
+    Symmetric: b(species1, species2) = b(species2, species1)
+    Pairs without their own coefficient in constants.py (D-O, D-C, D-N, D-S and the metal-metal pairs) follow
+    the Genda & Ikoma 2008 prescription (Appendix C) behind the approximated coefficients there: b scales as
+    1/sqrt(reduced mass), starting from b_H_O
+
+    Inputs:
+        - species1, species2: 'H', 'He', 'D', 'O', 'C', 'N' or 'S' [str]; anything else raises ValueError
+        - T: temperature [K]
+
+    Output: binary diffusion coefficient [molecules/m/s]; NaN for identical species (a species does not diffuse
+    through itself)
     '''
-    # Create function lookup dictionary (only created once when function is called)
-    coeff_functions = {
-        ('H', 'D'): b_H_D,
-        ('H', 'He'): b_H_He,
-        ('H', 'O'): b_H_O,
-        ('H', 'C'): b_H_C,
-        ('H', 'N'): b_H_N,
-        ('H', 'S'): b_H_S,
-        ('He', 'D'): b_He_D,
-        ('He', 'O'): b_He_O,
-        ('He', 'C'): b_He_C,
-        ('He', 'N'): b_He_N,
-        ('He', 'S'): b_He_S
-    }
-
-    # Always sort to ensure consistent lookup (lighter element first by atomic mass)
-    mass_order = {'H': 1, 'D': 2, 'He': 4, 'C': 12, 'N': 14, 'O': 16, 'S': 32}
-    if mass_order.get(species1, 0) <= mass_order.get(species2, 0):
-        key = (species1, species2)
-    else:
-        key = (species2, species1)
-
-    # Get function and call it with temperature
-    func = coeff_functions.get(key, b_H_He)  # default to H-He if pair not found
-    return func(T)
+    for s in (species1, species2):
+        if s not in _molar_masses:
+            raise ValueError(f"no diffusion coefficient for species '{s}'; known: {', '.join(_molar_masses)}")
+    if species1 == species2:
+        return np.nan
+    func = _b_functions.get((species1, species2)) or _b_functions.get((species2, species1))
+    if func is not None:
+        return func(T)
+    m1, m2 = _molar_masses[species1], _molar_masses[species2]
+    mu_pair = m1*m2/(m1 + m2) # reduced mass [kg/mol]
+    mu_HO = M_H*M_O/(M_H + M_O)
+    return b_H_O(T)*np.sqrt(mu_HO/mu_pair)
 
 def Phi_minor_species(Phi_1, Phi_2, H_1, H_2, H_minor, N_values, T, minor_species_idx, light_dominant_idx, heavy_dominant_idx):
     '''
