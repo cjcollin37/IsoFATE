@@ -1,4 +1,5 @@
-# isofate.mcmc configuration template: every option, at its default unless marked "placeholder".
+# isofate.mcmc configuration template: every option, at its default unless marked "placeholder" (the star, the
+# planet and the data to replace) or set up for an example fit (log_f_atm and age free, Rp fitted).
 # Copy it, edit the planet and the data, then:
 #     python -m isofate.mcmc check my_planet.toml        # one evaluation at the centre, cost estimate (and a
 #                                                         # solve in solve mode, see [solve] below)
@@ -10,7 +11,7 @@
 # Units are the ones given in the comments; everything is converted to SI internally.
 
 name = "my_planet"            # used in the output paths: <output_root>/<name>/mcmc_<stamp>/
-description = ""
+description = ""              # free text, printed by check and kept in summary.json
 # output_root = ".."          # relative to this file's directory; default: ./mcmc_results in the working directory
                               # (`template` uncomments it when the file goes into a results folder's configs/)
 
@@ -26,33 +27,46 @@ period = 10.0                 # [days] (placeholder); gives the semi-major axis 
 # Fp = 1000.0                 # bolometric insolation [W/m2]; default L/(4 pi d^2)
 
 [model]
-n_steps = 100000              # time steps; <= 1e6 unless allow_large_n_steps (about 1.1 GB per 1e6 steps per worker)
-n_atmodeller = 100            # steps between Atmodeller calls; 0 switches the coupling off (escape only)
+n_steps = 100000              # time steps from t0 to the age, so dt = (age - t0)/n_steps; <= 1e6 unless
+                              # allow_large_n_steps (about 1.1 GB per 1e6 steps per worker); `resolution` picks it
+n_atmodeller = 100            # time steps between Atmodeller calls, which re-equilibrate the atmosphere with the
+                              # magma ocean; 0 switches the coupling off (escape only)
 # allow_large_n_steps = false
-mechanism = "XUV"             # "XUV", "CPML", "XUV+CPML" or "phi kill"
-flux_model = "power law"      # "power law", "phoenix" or "Johnstone" (Johnstone has a units bug: do not fit with it)
-stellar_type = "M1"           # only used by flux_model = "Johnstone"
-activity = "medium"           # "low", "medium" or "high"; only used by flux_model = "phoenix"
+mechanism = "XUV"             # "XUV" (energy-limited), "CPML" (core-powered mass loss, Gupta & Schlichting 2020),
+                              # "XUV+CPML" or "phi kill"
+flux_model = "power law"      # "power law" (Ribas et al 2005), "phoenix" (semi-empirical MUSCLES data) or
+                              # "Johnstone" (Johnstone et al 2021; it has a units bug: do not fit with it)
+stellar_type = "M1"           # "M1", "K5" or "G5"; only used by flux_model = "Johnstone"
+activity = "medium"           # "low", "medium" or "high" (lower quartile, median, upper quartile of the MUSCLES
+                              # stars); only used by flux_model = "phoenix"
 step_fn = false               # XUV flux drops to params.F_final at t_sat instead of the power law
-RR = true                     # radiation-recombination limited escape (Murray-Clay et al. 2009)
+RR = true                     # radiation-recombination limited escape (Ly alpha cooling; Murray-Clay et al 2009)
 rad_evol = true               # evolve the radius (Lopez & Fortney 2014); false fixes it at the core radius
-thermal = true                # include the age term of the Lopez & Fortney radius
-dynamic_phi = true            # fractionate the two most abundant species (false: always H and He)
+thermal = true                # include the age term (thermal contraction) of the Lopez & Fortney radius
+dynamic_phi = true            # fractionate the two most abundant species (false: always H and He, which freezes an
+                              # O/C/N/S atmosphere once H and He are gone)
 t0 = 1e6                      # start of the run [yr]
-rho_rcb = 1.0                 # gas density at the radiative-convective boundary for CPML [kg/m3]
-melt_fraction_override = false   # false: melt fraction from the grid (needs 1 <= Mp <= 21 M_earth); or a value in (0, 1]
+rho_rcb = 1.0                 # gas density at the radiative-convective boundary for CPML [kg/m3]; 1 is the
+                              # reference value of Gupta & Schlichting 2020
+melt_fraction_override = false   # false: melt fraction from the grid (needs 1 <= Mp <= 21 M_earth); or a value
+                                 # in (0, 1] (0 is rejected: isocalc would read it as false)
 mantle_iron = false           # or {type = "static" | "dynamic", Fe_mass_fraction = 0.1}: mantle Fe reacts with O2
-composition = "ratios"        # "ratios": number ratios to H (below); "legacy": the recipe of isofate_MCMC.py
+                              # (static: all of it; dynamic: only the molten part)
+composition = "ratios"        # "ratios": number ratios to H (below); "legacy": the recipe of isofate_MCMC.py, which
+                              # is nonlinear in the O/H enhancement (see "Caveats" in the README)
 backend = "isocalc"           # "isocalc", or "toy" (a fast fake model for testing the tool)
 
 # Parameters. Each [params.NAME] table may set:
 #   vary        false: fixed at value; true: free with the prior below
-#   value       fixed value, also the centre of sampler.init = "ball" and of `check` (default: bounds midpoint)
+#   value       fixed value, also the centre of sampler.init = "ball" and of `check` (default when free: mu, else
+#               the midpoint of the bounds, geometric for loguniform)
 #   prior       "uniform" (default), "loguniform" (bounds > 0) or "normal" (mu, sigma; bounds optional truncation)
 #   bounds      [lo, hi], required for uniform and loguniform
 #   mu, sigma   for normal
 #   init_scale  spread of init = "ball" (default 1% of the box width)
 # A bare number, NAME = x, fixes the parameter at x. Unlisted parameters are fixed at their defaults.
+# The free parameters make up theta, the point the sampler moves, always in the order of the tables below (the
+# order of the registry, whatever the order of the tables in a config).
 
 [params.log_f_atm]            # initial atmospheric mass fraction, f_atm = 10**x [dex]; must be < 0
 vary = true
@@ -60,7 +74,7 @@ prior = "uniform"
 bounds = [-5.0, -1.0]
 value = -2.0
 
-[params.Mp]                   # planet mass [M_earth] (required); within [1, 21] when Atmodeller runs
+[params.Mp]                   # planet mass [M_earth] (required); within [1, 21] when Atmodeller runs (melt grid)
 vary = false
 value = 5.0                   # placeholder
 # prior = "normal"
@@ -92,19 +106,19 @@ value = -3.0
 [params.F_final]              # XUV flux after t_sat when model.step_fn = true [W/m2], >= 0
 value = 0.0
 
-[params.t_sat]                # XUV saturation time [yr], > 0
+[params.t_sat]                # XUV saturation time [yr], > 0; about 5e8 for an M1 star, 5e7 for a G star
 value = 5e8
 
 [params.t_pms]                # end of the pre-main-sequence XUV boost [yr]; <= t0 switches it off
 value = 0.0
 
-[params.pms_factor]           # XUV boost factor before t_pms, > 0
-value = 100.0
+[params.pms_factor]           # XUV boost factor at t0, falling as a power law to 1 at t_pms, > 0; ~1e2 for
+value = 100.0                 # mid-to-late M stars (Ramirez & Kaltenegger 2014)
 
-[params.beta]                 # XUV power-law index (step_fn = false)
+[params.beta]                 # XUV power-law index (step_fn = false); -1.23 matches the MUSCLES data
 value = -1.23
 
-[params.albedo]               # Bond albedo in [0, 1): T = EqTemp(Fp, A)
+[params.albedo]               # Bond albedo in [0, 1): T = EqTemp(Fp, A), with full redistribution
 value = 0.0
 
 # [params.Rp_fixed]           # optional, unset by default: a constant radius [R_earth] (isocalc Rp_override) instead of
@@ -122,6 +136,8 @@ value = 0.0
 #   kind         "detection" (default), "upper" or "lower" (a one-sided limit at value with width sigma)
 #   floor        log10-space floor of the model value (defaults below), e.g. 0 escape becomes log10(floor)
 #   sigma_model  extra model error in the same space, added in quadrature (default 0)
+# Use log10 space for quantities known to a factor (escape rates, ratios, VMRs): the error is then in dex, and a
+# model value of 0 lands at the floor instead of -inf, far below a detection but inside an upper limit.
 # Mp, age and Teq are inputs: with a free parameter they act exactly like a prior.
 # An undefined model value (e.g. the composition of a stripped atmosphere) rules out a detection or a lower
 # limit and satisfies an upper limit.
@@ -235,31 +251,41 @@ use = false
 
 # Solve mode: sample the model value of one observable instead of the free parameter that pins it down. Use it
 # when a precise datum makes the posterior a thin ridge in that parameter (e.g. an outflow composition along
-# log_f_atm), on which emcee's moves stall. The sampler then moves in u = T(observable) (its likelihood space:
-# log10 for space = "log10"), u_<observable> in place of param in theta; each evaluation finds param inside its
-# prior that gives u (a root search, about 5-15 model runs) and adds the exact Jacobian |d param/du| to the density,
-# so the posterior over the physical parameters is unchanged. The summary, corner_params.png and the tracks report
-# param (from the blob solve_value); corner_sampled.png shows u. Solve mode cannot sample a plateau of the
-# observable inside the u range: with Rp along log_f_atm, stripped planets all have the bare-core radius, and that
-# part of the posterior is left out (the config warns; README section 10).
+# log_f_atm), on which emcee's moves stall: they combine walker positions linearly, and such a combination stays
+# on a thin, curved ridge only for walkers close together. The sampler then moves in u = T(observable) (its
+# likelihood space: log10 for space = "log10"), u_<observable> in place of param in theta; each evaluation finds
+# param inside its prior that gives u (a root search, about 5-15 model runs) and adds the exact Jacobian
+# |d param/du| to the density, so the posterior over the physical parameters is unchanged. The summary,
+# corner_params.png and the tracks report param (from the blob solve_value); corner_sampled.png shows u. Solve
+# mode cannot sample a plateau of the observable inside the u range: with Rp along log_f_atm, stripped planets all
+# have the bare-core radius, and that part of the posterior is left out (the config warns; see "Solve mode" in the
+# README).
 [solve]
 param = ""                    # the free parameter to solve for, e.g. "log_f_atm"; "" (default): off
 observable = "Rp"             # the active, non-input observable whose model value is sampled (a detection)
 range_sigma = 6.0             # u in [datum - range_sigma*sigma_lo, datum + range_sigma*sigma_hi]: drops < e^-18
+                              # (where the observable's term is below -range_sigma^2/2)
 tol = 0.01                    # solve until |T(model) - u| <= tol*sigma
 max_evals = 40                # model runs of one root search at most (the Jacobian adds 1, or 2 with "central")
-warm_start = true             # start each solve from a table fitted to the solved points (solve_table.npz)
+warm_start = true             # start each solve from a table fitted to the solved points (solve_table.npz); on
+                              # LHS 1140 b, after the refits, a warm solve takes about 5-6 model runs, a cold one 16
 refit_steps = [25, 50, 100, 200, 400]  # refit that table to the chain's solved states after these steps ([]: never)
 derivative = "forward"        # dT/dP for the Jacobian: "forward" (1 model run at P* + h; 2 where T is undefined
                               # there) or "central" (2 runs; its ln|J| differs from forward by about 0.01, within
                               # the numerical noise of either)
 
 [sampler]
-nwalkers = "auto"             # or an even number >= 2*ndim; auto: max(4 ndim, 16) rounded up to 4*workers (de) or 2*workers
+nwalkers = "auto"             # or an even number >= 2*ndim; auto: max(4 ndim, 16) rounded up to a multiple of
+                              # 4*workers (de) or 2*workers: emcee evaluates the walkers in 4 groups per step with
+                              # DESnooker (2 without), and each group waits for its slowest evaluation
 max_steps = 5000
 checkpoint_every = 50         # steps between atomic chain.npz checkpoints (and at most one a minute)
 print_every = 10              # steps between progress lines (also in run.log)
-moves = "de"                  # "de": DE 0.7 + DE(gamma0=1) 0.1 + DESnooker 0.2; "de_only": DE 0.9 + DE(gamma0=1) 0.1; "stretch"
+moves = "de"                  # "de": DE 0.7 + DE(gamma0=1) 0.1 + DESnooker 0.2; "de_only": DE 0.9 + DE(gamma0=1)
+                              # 0.1; "stretch": emcee's default move (Goodman & Weare 2010). DE is differential
+                              # evolution (Nelson et al 2013), DESnooker its snooker update (ter Braak & Vrugt 2008);
+                              # gamma0 = 1 lets walkers jump between modes. On bimodal and correlated test targets
+                              # "de" gave a tau of 19 steps against 53 for "stretch"
 seed = 12345
 # init = "prescan"            # default "prescan", or "solve" in solve mode (so not set here). "prescan": the best of
                               # prescan_factor*nwalkers Latin-hypercube prior points; "bisect": prior draws moved
@@ -273,8 +299,11 @@ bisect_draws = "auto"         # prior draws per batch (auto: 3*nwalkers); up to 
 bisect_iters = 22             # at most this many halvings per draw (22 shrink a 3.7 dex bracket to 1e-6 dex)
 bisect_tol = 0.1              # a draw has converged when |model - data| <= bisect_tol*sigma, in the likelihood space
 bisect_fallback = true        # too few converged after 3 batches: init = "prescan" with a warning (false: an error)
-reset_stuck_at = 0            # step at which stuck walkers are replaced by copies of good ones (0: never)
-stop_on_convergence = true
+reset_stuck_at = 0            # step at which stuck walkers are replaced by copies of good ones (0: never); a walker
+                              # is stuck when it accepts less than min(0.05, 0.2 x the median walker's), or nothing
+# Convergence. tau is the integrated autocorrelation time: a walker gives about one independent sample every tau
+# steps (Sokal 1997), so a run holds about nwalkers*steps/tau of them.
+stop_on_convergence = true    # stop once converged; false: run to max_steps
 check_every = 100             # steps between autocorrelation-time estimates
 n_tau = 50.0                  # converged when steps > n_tau*max(tau) ...
 tau_rtol = 0.01               # ... and tau changed by less than max(tau_rtol, its statistical noise) since the last
@@ -287,13 +316,14 @@ track_points = 300            # time points per track
 max_unexpected_errors = 10    # abort after this many status-5 evaluations (bugs)
 
 [parallel]
-workers = 6                   # reduced automatically to fit the memory budget
+workers = 6                   # reduced automatically to fit the memory budget; on the 8-core M1 the 4 performance
+                              # cores do most of the work, and workers 5 and 6 add 8-18 % throughput over 4
 max_memory_gb = 8.0           # budget of all workers [GB]: about 0.86 GB each at n_steps = 1e5, 1.9 GB at 1e6
 check_available = true        # also fit 70% of the memory the OS reports available; on a Mac with a browser open
                               # that is often only 2-4 GB (compressible memory counts as used): false trusts
                               # max_memory_gb alone
-cache = true                  # Numba and JAX compile caches in <output_root>/.cache
-warmup = true                 # compile in each worker before sampling
+cache = true                  # Numba and JAX compile caches in <output_root>/.cache (warm-up 2.4 s instead of 6 s)
+warmup = true                 # compile in each worker before sampling, all workers at once behind a barrier
 
 [resolution]                  # python -m isofate.mcmc resolution: choose n_steps and n_atmodeller
 n_steps = [10000, 30000, 100000, 300000, 1000000]

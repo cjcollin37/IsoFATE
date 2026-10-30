@@ -1,11 +1,14 @@
 '''
-TOML configuration of an MCMC run: loading, overrides, validation and the normalized cfg dict.
+TOML configuration of an MCMC run: the defaults, the parameter and observable registries, reading a config and
+its --set overrides, validation of every section (solve mode included), the resolved config.json, the output
+directories and the README tables.
 
-load_config(path, overrides) returns a plain, picklable dict. Internally everything is SI (star mass in kg,
-distances in m, period in s), except the parameters and observables, which keep the units of the PARAMS and
-OBSERVABLES registries below (e.g. Mp in Earth masses, age in yr, Mdot in kg/s).
+load_config(path, overrides) returns the normalized cfg dict, a plain, picklable dict (the spawned workers get a
+copy). Internally everything is SI (star mass [kg], distances [m], period [s]), except the parameters and
+observables, which keep the units of the PARAMS and OBSERVABLES registries below (e.g. Mp [M_earth], age [yr],
+Mdot [kg/s]).
 
-Relative paths (output_root) are relative to the config file's directory. Without output_root, results go to
+A relative output_root is relative to the config file's directory. Without output_root, results go to
 ./mcmc_results in the current working directory.
 '''
 
@@ -24,15 +27,16 @@ from isofate.constants import Ls, Ms, Rs, au2m, s2day
 from isofate.orbit_params import Insolation, Luminosity, SemiMajor
 
 inf = math.inf
-CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'configs')
-TEMPLATE = os.path.join(CONFIG_DIR, 'template.toml')
-MAX_N_STEPS = int(1e6) # larger needs model.allow_large_n_steps = true
-MAX_AGE = 1.4e10 # [yr]
+CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'configs') # example configs and the template
+TEMPLATE = os.path.join(CONFIG_DIR, 'template.toml') # every option at its default (python -m isofate.mcmc template)
+MAX_N_STEPS = int(1e6) # larger needs model.allow_large_n_steps = true (worker memory grows with n_steps)
+MAX_AGE = 1.4e10 # [yr] upper end of the age, about the age of the Universe
 
 
 class ConfigError(ValueError):
     '''
-    A problem with the configuration, with a message saying how to fix it.
+    A problem with the configuration, with a message saying how to fix it
+    The command line prints it as "error: ..." without a traceback and exits with code 2.
     '''
 
 
@@ -40,12 +44,24 @@ class ConfigError(ValueError):
 
 def _param(default, unit, label, limits, doc, optional = False):
     '''
-    optional: default None means unset (off), not required.
+    Returns one entry of the PARAMS registry
+
+    Inputs:
+        - default: value of a fixed parameter without a value in the config [unit]; None: required, or unset if optional
+        - unit: unit in the TOML, in theta and in the outputs; '' for dimensionless [str]
+        - label: matplotlib axis label [str]
+        - limits: hard validity range (lo, hi, lo_open, hi_open) [tuple]; None: set by hard_limits
+        - doc: meaning, the last column of the README params table [str]
+        - optional: True when a default of None means unset (off), not required [Bool]
+
+    Output: {default, unit, label, limits, doc, optional} [dict]
     '''
     return {'default': default, 'unit': unit, 'label': label, 'limits': limits, 'doc': doc, 'optional': optional}
 
 
-# free/fixed parameters in theta order. limits = hard validity (lo, hi, lo_open, hi_open); None: see hard_limits
+# PARAMETER REGISTRY - every model input a config can fix or vary. The free ones, in this order, make up theta.
+# limits = hard validity (lo, hi, lo_open, hi_open), True for an open (excluded) end; None: see hard_limits, since
+# the valid Mp and age depend on the model settings. The doc strings make up the README params table.
 PARAMS = {
     'log_f_atm': _param(-2.0, 'dex', r'$\log_{10} f_{\rm atm}$', (-inf, 0.0, True, True),
                         'initial atmospheric mass fraction, f_atm = 10**x'),
@@ -74,17 +90,32 @@ PARAMS = {
 
 def _obs(unit, label, floor = 0.0, ceiling = None, needs_atmodeller = False, input = False, doc = ''):
     '''
-    floor: in log10 space the model is clipped to [floor, ceiling] (floor 0: no clipping, log10(0) = -inf).
-    ceiling None means 1/floor, which caps the infinite ratios x/0 of dimensionless observables; rates [kg/s]
-    have no ceiling (inf).
+    Returns one entry of the OBSERVABLES registry
+
+    Inputs:
+        - unit: unit of value in the TOML and in the blobs; '' for dimensionless [str]
+        - label: matplotlib axis label [str]
+        - floor: in log10 space the model is clipped to [floor, ceiling] before the log, so a zero escape rate or
+          ratio becomes log10(floor) instead of -inf; 0: no clipping (log10(0) = -inf) [unit]
+        - ceiling: None means 1/floor, which caps the infinite ratios x/0 of dimensionless observables (worked out
+          in _observables from the floor in use); the escape rates [kg/s] pass inf, no ceiling, since their
+          values lie far above 1/floor [unit]
+        - needs_atmodeller: True when only an Atmodeller solve gives the value [Bool]
+        - input: True for an isocalc input (Mp, age, Teq): compared before the model runs, it acts as a prior [Bool]
+        - doc: definition, a column of the README observables table [str]
+
+    Output: {unit, label, floor, ceiling, needs_atmodeller, input, doc} [dict]
     '''
     return {'unit': unit, 'label': label, 'floor': floor, 'ceiling': ceiling, 'needs_atmodeller': needs_atmodeller,
             'input': input, 'doc': doc}
 
 
+# Gases with a surface VMR observable: the 10 Atmodeller gases plus He
 VMR_MOLECULES = ('H2', 'He', 'H2O', 'CO', 'CO2', 'CH4', 'N2', 'O2', 'S2', 'SO2', 'H2SO4')
 
-# observables: units in TOML and in the blobs; all at the last step of the run (age + one step)
+# OBSERVABLE REGISTRY - what the model can be compared with. Units are those of value in the TOML and of the blobs;
+# every value is taken at the last step of the run (age + one step). This order is the order of the blob fields
+# (model.BLOB_FIELDS) and of the README observables table, which the doc strings make up.
 OBSERVABLES = {
     'Mp': _obs('M_earth', r'$M_p$', input = True, doc = 'planet mass (input: acts as a prior on Mp)'),
     'age': _obs('yr', 'age', input = True, doc = 'age (input: acts as a prior on age)'),
@@ -116,6 +147,7 @@ OBSERVABLES = {
     'mmw': _obs('g/mol', r'$\mu$', needs_atmodeller = True,
                 doc = 'mean molecular weight of the 10 Atmodeller gases plus He'),
 }
+# One VMR per gas; He is not an Atmodeller gas, so its amount comes from conservation of the He budget
 for _mol in VMR_MOLECULES:
     OBSERVABLES[f'VMR_{_mol}'] = _obs('', f'VMR {_mol}', 1e-15, needs_atmodeller = True,
                                       doc = f'volume mixing ratio of {_mol} at the surface (Atmodeller)'
@@ -123,6 +155,10 @@ for _mol in VMR_MOLECULES:
 OBSERVABLES['T_surf'] = _obs('K', r'$T_{\rm surf}$', needs_atmodeller = True,
                              doc = 'surface temperature at the base of the adiabat (not directly observable)')
 
+
+###_____Allowed keys, defaults and choices_____###
+
+# Allowed keys of the top level, of [star], [planet], [params.NAME] and [observables.NAME]
 TOP_KEYS = ('name', 'description', 'output_root', 'star', 'planet', 'model', 'params', 'observables', 'solve',
             'sampler', 'parallel', 'resolution')
 STAR_KEYS = ('mass', 'radius', 'teff', 'luminosity') # [M_sun], [R_sun], [K], [L_sun]
@@ -130,6 +166,9 @@ PLANET_KEYS = ('period', 'semi_major_axis', 'Fp') # [days], [AU], [W/m2]
 PARAM_KEYS = ('vary', 'value', 'prior', 'bounds', 'mu', 'sigma', 'init_scale')
 OBS_KEYS = ('use', 'value', 'sigma', 'space', 'kind', 'floor', 'sigma_model')
 
+# DEFAULTS of the other sections; configs/template.toml explains every key. _section coerces a value to the type of
+# its default (bool, int, float, list of whole numbers) and leaves string defaults such as nwalkers = 'auto' to the
+# section's own checks; [model] is checked key by key in _model
 MODEL_DEFAULTS = {
     'n_steps': 100000, 'n_atmodeller': 100, 'mechanism': 'XUV', 'flux_model': 'power law', 'stellar_type': 'M1',
     'activity': 'medium', 'step_fn': False, 'RR': True, 'rad_evol': True, 'thermal': True, 'dynamic_phi': True,
@@ -143,14 +182,16 @@ SAMPLER_DEFAULTS = {
     'burn_factor': 3.0, 'tracks': 200, 'track_points': 300, 'max_unexpected_errors': 10}
 SOLVE_DEFAULTS = {'param': '', 'observable': 'Rp', 'range_sigma': 6.0, 'tol': 0.01, 'max_evals': 40, 'warm_start': True,
                   'derivative': 'forward', 'refit_steps': [25, 50, 100, 200, 400]}
-EMPTY_LISTS = ('refit_steps',) # list options that may be empty
+EMPTY_LISTS = ('refit_steps',) # list options that may be empty (refit_steps = []: never refit)
 PARALLEL_DEFAULTS = {'workers': 6, 'max_memory_gb': 8.0, 'check_available': True, 'cache': True, 'warmup': True}
 RESOLUTION_DEFAULTS = {
     'n_steps': [10000, 30000, 100000, 300000, 1000000], 'n_atmodeller': [1000, 300, 100, 30, 10, 3, 1],
     'points': 6, 'source': 'auto', 'tol': 0.1, 'dlogl_tol': 0.5, 'perturb': 1e-6, 'shift_tol': 1e-3,
     'max_eval_seconds': 300.0}
 
+# Allowed values of the string options (_choice); mantle_iron_type is model.mantle_iron.type
 CHOICES = {
+    # CPML: core-powered mass loss; 'phi kill': an escape flux that removes the whole atmosphere (work in progress)
     'mechanism': ('XUV', 'CPML', 'XUV+CPML', 'phi kill'),
     'flux_model': ('power law', 'phoenix', 'Johnstone'),
     'activity': ('low', 'medium', 'high'),
@@ -159,6 +200,7 @@ CHOICES = {
     'prior': ('uniform', 'loguniform', 'normal'),
     'space': ('linear', 'log10'),
     'kind': ('detection', 'upper', 'lower'),
+    # de: DE 0.7 + DE(gamma0 = 1) 0.1 + DESnooker 0.2; de_only: DE 0.9 + DE(gamma0 = 1) 0.1; stretch: emcee's default
     'moves': ('de', 'stretch', 'de_only'),
     'init': ('prescan', 'prior', 'ball', 'bisect', 'solve'),
     'mantle_iron_type': ('static', 'dynamic'),
@@ -167,17 +209,22 @@ CHOICES = {
 
 ###_____Hard validity of the parameters_____###
 
-_MELT_MASS_RANGE = None
+_MELT_MASS_RANGE = None # (min, max) planet mass of the melt grid [M_earth], read once by melt_mass_range
 
 
 def melt_mass_range():
     '''
-    Planet-mass range [M_earth] covered by isofate/data/melt_fraction_grid.npz (needed whenever Atmodeller runs
-    without a melt fraction override).
+    Returns the planet-mass range covered by the melt fraction grid, isofate/data/melt_fraction_grid.npz
+    Atmodeller needs the mantle melt fraction whenever it runs without model.melt_fraction_override; the coupler
+    interpolates it on this grid in Mp and surface temperature and raises outside it, so Mp must stay inside this
+    range then. The file is read once.
+
+    Output: (min, max) planet mass of the grid [M_earth]
     '''
     global _MELT_MASS_RANGE
     if _MELT_MASS_RANGE is None:
         path = importlib.resources.files('isofate.data').joinpath('melt_fraction_grid.npz')
+        # as_file gives a real file path, even when the package is imported from a zip
         with importlib.resources.as_file(path) as p, np.load(p) as data:
             _MELT_MASS_RANGE = (float(data['mass_grid'].min()), float(data['mass_grid'].max()))
     return _MELT_MASS_RANGE
@@ -185,8 +232,17 @@ def melt_mass_range():
 
 def hard_limits(name, model):
     '''
-    Physical validity interval (lo, hi, lo_open, hi_open) of a registry parameter, given cfg['model']; unbounded
-    for the sampled coordinate u_<observable> of solve mode (its support is its bounds).
+    Returns the physical validity range of a registry parameter: where the model can run, whatever the prior
+    Prior bounds must lie inside it. Mp and age depend on the model settings: with Atmodeller on and no melt
+    fraction override, Mp must lie inside the melt grid, ends included (melt_mass_range), else Mp > 0; the age must
+    lie in (t0, MAX_AGE]. Names outside PARAMS, such as the sampled coordinate u_<observable> of solve mode, are
+    unbounded (their support is their bounds).
+
+    Inputs:
+        - name: parameter name [str]
+        - model: the model settings, cfg['model'] [dict]
+
+    Output: (lo, hi, lo_open, hi_open), lo_open and hi_open True for an excluded end [tuple]
     '''
     if name not in PARAMS:
         return (-inf, inf, True, True)
@@ -195,11 +251,14 @@ def hard_limits(name, model):
             return melt_mass_range() + (False, False)
         return (0.0, inf, True, True)
     if name == 'age':
-        return (model['t0'], MAX_AGE, True, False)
+        return (model['t0'], MAX_AGE, True, False) # the run goes from t0 to the age
     return PARAMS[name]['limits']
 
 
 def within_limits(name, x, model):
+    '''
+    Returns True when x lies inside the hard validity range of name (hard_limits); None, NaN and inf never do
+    '''
     lo, hi, lo_open, hi_open = hard_limits(name, model)
     if x is None or not math.isfinite(x):
         return False
@@ -209,6 +268,9 @@ def within_limits(name, x, model):
 
 
 def _limits_text(name, model):
+    '''
+    Returns the hard validity range as text for the error messages, e.g. '(0, 1]'
+    '''
     lo, hi, lo_open, hi_open = hard_limits(name, model)
     return f"{'(' if lo_open else '['}{lo:g}, {hi:g}{')' if hi_open else ']'}"
 
@@ -217,12 +279,19 @@ def _limits_text(name, model):
 
 def _check_keys(d, allowed, where):
     '''
-    Raises ConfigError on keys of d not in allowed, suggesting close names.
+    Checks that d is a table and that every key of it is allowed
+    An unknown key raises ConfigError suggesting up to 3 close names (case-insensitive), e.g. "unknown key
+    'n_step' in [model]; did you mean 'n_steps'?", or listing the allowed keys when none is close.
+
+    Inputs:
+        - d: a table of the raw TOML [dict]
+        - allowed: the allowed keys; a dict gives its keys
+        - where: the table, for the message, e.g. '[model]' [str]
     '''
     if not isinstance(d, dict):
         raise ConfigError(f'{where} must be a table, got {d!r}')
     allowed = list(allowed)
-    lower = {a.lower(): a for a in allowed}
+    lower = {a.lower(): a for a in allowed} # match in lower case, suggest in the original case
     for key in d:
         if key in allowed:
             continue
@@ -235,6 +304,20 @@ def _check_keys(d, allowed, where):
 
 
 def _float(value, where, positive = False, nonnegative = False):
+    '''
+    Returns value as a float, or raises ConfigError
+    Booleans and NaN are refused. inf passes (-inf only without positive or nonnegative), so callers that need a
+    finite number check it themselves.
+
+    Inputs:
+        - value: the TOML value
+        - where: dotted key for the message, e.g. 'star.mass' [str]
+        - positive: True to require value > 0 [Bool]
+        - nonnegative: True to require value >= 0 [Bool]
+
+    Output: value [float]
+    '''
+    # bool is a subclass of int in Python: without this, true would pass as 1
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f'{where} must be a number, got {value!r}')
     value = float(value)
@@ -249,9 +332,17 @@ def _float(value, where, positive = False, nonnegative = False):
 
 def _int(value, where, minimum = None):
     '''
-    An integer; floats with integral values (e.g. 1e5) are accepted, NaN and inf are not (int(inf) would raise
-    OverflowError, a traceback instead of this message). Only floats are tested for finiteness: TOML integers can
-    be arbitrarily large, and math.isfinite(10**400) raises OverflowError itself.
+    Returns value as an int, or raises ConfigError
+    Floats with whole values are accepted (n_steps = 1e5 is a float in TOML); NaN and inf are not, since int(inf)
+    would raise OverflowError, a traceback instead of this message. Only floats are tested for finiteness: TOML
+    integers can be arbitrarily large, and math.isfinite(10**400) raises OverflowError itself. Booleans are refused.
+
+    Inputs:
+        - value: the TOML value
+        - where: dotted key for the message, e.g. 'model.n_steps' [str]
+        - minimum: smallest allowed value; None: no minimum [int]
+
+    Output: value [int]
     '''
     if (isinstance(value, bool) or not isinstance(value, (int, float))
             or (isinstance(value, float) and not math.isfinite(value)) or value != int(value)):
@@ -263,12 +354,18 @@ def _int(value, where, minimum = None):
 
 
 def _bool(value, where):
+    '''
+    Returns value if it is a TOML boolean (true or false), else raises ConfigError; 0 and 1 are refused
+    '''
     if not isinstance(value, bool):
         raise ConfigError(f'{where} must be true or false, got {value!r}')
     return value
 
 
 def _choice(value, key, where):
+    '''
+    Returns value if it is one of CHOICES[key], else raises ConfigError suggesting the closest choice
+    '''
     if value not in CHOICES[key]:
         close = difflib.get_close_matches(str(value), CHOICES[key], n = 1)
         hint = f'; did you mean {close[0]!r}?' if close else ''
@@ -279,6 +376,17 @@ def _choice(value, key, where):
 ###_____Sections_____###
 
 def _output_root(value, base):
+    '''
+    Returns the absolute path of the results folder
+    None (no output_root in the config) gives ./mcmc_results in the current working directory; a relative path
+    is relative to base; ~ is expanded.
+
+    Inputs:
+        - value: output_root of the config, or None [str]
+        - base: the config file's directory (the working directory for a raw dict) [str]
+
+    Output: absolute path [str]
+    '''
     if value is None:
         return os.path.abspath(os.path.join(os.getcwd(), 'mcmc_results'))
     if not isinstance(value, str):
@@ -290,6 +398,20 @@ def _output_root(value, base):
 
 
 def _star(raw):
+    '''
+    Validates [star] and converts it to SI
+    mass is required. A given luminosity is used as it is; else it comes from radius and teff,
+    L = 4 pi R^2 sigma Teff^4, and without those it is an error.
+
+    Inputs:
+        - raw: the raw [star] table, in solar units and K [dict]
+
+    Output: the star settings [dict]
+        - M: stellar mass [kg]
+        - R: stellar radius [m]; None when not given
+        - Teff: effective temperature [K]; None when not given
+        - L: bolometric luminosity [W]
+    '''
     _check_keys(raw, STAR_KEYS, '[star]')
     if 'mass' not in raw:
         raise ConfigError('[star] mass [M_sun] is required')
@@ -299,30 +421,66 @@ def _star(raw):
     if 'luminosity' in raw:
         L = _float(raw['luminosity'], 'star.luminosity', positive = True)*Ls # [W]
     elif R is not None and Teff is not None:
-        L = float(Luminosity(R, Teff))
+        L = float(Luminosity(R, Teff)) # 4 pi R^2 sigma Teff^4 [W]
     else:
         raise ConfigError('[star] needs luminosity [L_sun], or radius [R_sun] and teff [K]')
     return {'M': M, 'R': R, 'Teff': Teff, 'L': L}
 
 
 def _planet(raw, star, warnings):
+    '''
+    Validates [planet] and converts it to SI
+    The semi-major axis comes from Kepler's third law for the period and the stellar mass, unless semi_major_axis
+    is given; when both are given and differ by more than 1 %, semi_major_axis wins, with a warning. One of the two
+    is required. Fp defaults to the bolometric insolation L/(4 pi d^2).
+
+    Inputs:
+        - raw: the raw [planet] table [dict]
+        - star: the star settings (_star) [dict]
+        - warnings: list the warnings are appended to [list]
+
+    Output: the planet settings [dict]
+        - P: orbital period [s]; None when not given
+        - d: semi-major axis [m]
+        - Fp: bolometric insolation [W/m2]
+    '''
     _check_keys(raw, PLANET_KEYS, '[planet]')
     P = _float(raw['period'], 'planet.period', positive = True)/s2day if 'period' in raw else None # [s]
     if 'semi_major_axis' in raw:
         d = _float(raw['semi_major_axis'], 'planet.semi_major_axis', positive = True)*au2m # [m]
-        mismatch = abs(SemiMajor(star['M'], P)/d - 1) if P is not None else 0.0
+        mismatch = abs(SemiMajor(star['M'], P)/d - 1) if P is not None else 0.0 # relative to Kepler's law
         if mismatch > 0.01:
             warnings.append(f"semi_major_axis differs by {100*mismatch:.1f}% from Kepler's law for the period and "
                             'stellar mass; using semi_major_axis')
     elif P is not None:
-        d = float(SemiMajor(star['M'], P))
+        d = float(SemiMajor(star['M'], P)) # Kepler's third law [m]
     else:
         raise ConfigError('[planet] needs period [days] or semi_major_axis [AU]')
-    Fp = _float(raw['Fp'], 'planet.Fp', positive = True) if 'Fp' in raw else float(Insolation(star['L'], d))
+    Fp = _float(raw['Fp'], 'planet.Fp', positive = True) if 'Fp' in raw else float(Insolation(star['L'], d)) # [W/m2]
     return {'P': P, 'd': d, 'Fp': Fp}
 
 
 def _model(raw, warnings):
+    '''
+    Validates [model], filling in MODEL_DEFAULTS
+    Checks the flags and the choices; n_steps >= 1, and at most MAX_N_STEPS unless allow_large_n_steps (the memory
+    of a worker grows with n_steps); 0 <= n_atmodeller <= n_steps; t0 > 0 and rho_rcb > 0. Warns for the uncoupled
+    model (n_atmodeller = 0) and for flux_model = 'Johnstone'. params.Rp_fixed may switch rad_evol off later
+    (_params).
+
+    Inputs:
+        - raw: the raw [model] table [dict]
+        - warnings: list the warnings are appended to [list]
+
+    Output: the model settings, the keys of MODEL_DEFAULTS [dict], among them
+        - n_steps: time steps of a run [int]
+        - n_atmodeller: time steps between Atmodeller calls; 0: Atmodeller off [int]
+        - t0: start of the run [yr]
+        - rho_rcb: gas density at the radiative-convective boundary, for CPML [kg/m3]
+        - melt_fraction_override: false (melt fraction from the grid), or a melt fraction in (0, 1] [ndim]
+        - mantle_iron: false, or {'type': 'static' or 'dynamic', 'Fe_mass_fraction': x}: mantle Fe that reacts
+          with O2 [dict]
+    '''
     _check_keys(raw, MODEL_DEFAULTS, '[model]')
     model = dict(MODEL_DEFAULTS)
     model.update(raw)
@@ -330,6 +488,7 @@ def _model(raw, warnings):
         model[key] = _bool(model[key], f'model.{key}')
     for key in ('mechanism', 'flux_model', 'activity', 'composition', 'backend'):
         _choice(model[key], key, f'model.{key}')
+    # stellar_type is free text: only flux_model = 'Johnstone' reads it
     if not isinstance(model['stellar_type'], str):
         raise ConfigError(f"model.stellar_type must be a string, got {model['stellar_type']!r}")
     model['n_steps'] = _int(model['n_steps'], 'model.n_steps', minimum = 1)
@@ -347,6 +506,7 @@ def _model(raw, warnings):
     if model['flux_model'] == 'Johnstone':
         warnings.append("flux_model = 'Johnstone' reads a hard-coded data path and its phi_E has a units bug "
                         '(no 1/(4 Vpot)); do not use it for fits')
+    # melt_fraction_override = false: the melt fraction comes from the grid, which limits Mp (hard_limits)
     melt = model['melt_fraction_override']
     if melt is not False:
         melt = _float(melt, 'model.melt_fraction_override')
@@ -354,6 +514,7 @@ def _model(raw, warnings):
             raise ConfigError('model.melt_fraction_override must be false or in (0, 1] (isocalc treats 0.0 as '
                               f'false and uses the melt grid), got {melt:g}')
         model['melt_fraction_override'] = melt
+    # Mantle Fe that reacts with O2, passed to isocalc as mantle_iron_dict
     iron = model['mantle_iron']
     if iron is not False:
         _check_keys(iron, ('type', 'Fe_mass_fraction'), '[model.mantle_iron]')
@@ -366,6 +527,9 @@ def _model(raw, warnings):
 
 
 def _bounds(value, where):
+    '''
+    Returns bounds as [lo, hi] floats with lo < hi; None stays None; anything else raises ConfigError
+    '''
     if value is None:
         return None
     if not isinstance(value, (list, tuple)) or len(value) != 2:
@@ -377,11 +541,36 @@ def _bounds(value, where):
 
 
 def _params(raw, model, warnings):
+    '''
+    Validates the [params.NAME] tables, for every parameter of the registry, in registry order
+    A parameter the config leaves out is fixed at its registry default (Mp has none: it is required, and the
+    optional Rp_fixed stays unset); a bare number, NAME = x, fixes it at x.
+    A free parameter needs bounds for a uniform or loguniform prior (bounds > 0 for loguniform), and mu and sigma
+    for a normal one (bounds then truncate it). Its bounds, or mu of a normal prior without bounds, must lie inside
+    the hard validity range (hard_limits). A free parameter without a value gets the centre of its prior: mu
+    (normal, when mu lies inside the bounds), the geometric mean of the bounds (loguniform), else their midpoint.
+    The legacy composition takes only log_OtoH_enhancement, with a warning when it is not 0. Setting Rp_fixed
+    switches model['rad_evol'] to false, in place, with a warning.
+
+    Inputs:
+        - raw: the raw [params] table [dict]
+        - model: the model settings (_model); rad_evol may be changed [dict]
+        - warnings: list the warnings are appended to [list]
+
+    Output: {name: entry} for every name in PARAMS [dict]; each entry holds
+        - vary: True for a free parameter [Bool]
+        - value: the fixed value, or the centre of a free one (init = 'ball', check); None for an unset optional one
+        - prior: 'uniform', 'loguniform' or 'normal'; 'fixed' when not free [str]
+        - bounds: [lo, hi], or None [list]
+        - mu, sigma: of a normal prior; None when not given
+        - init_scale: spread of init = 'ball'; None for the default
+        - unit, label: from the registry [str]
+    '''
     _check_keys(raw, PARAMS, '[params]')
     out = {}
     for name, reg in PARAMS.items():
         where = f'params.{name}'
-        entry = raw.get(name, {})
+        entry = raw.get(name, {}) # left out: fixed at the registry default
         if not isinstance(entry, dict): # shorthand: name = value, a fixed parameter
             entry = {'value': entry}
         _check_keys(entry, PARAM_KEYS, f'[{where}]')
@@ -395,7 +584,7 @@ def _params(raw, model, warnings):
             init_scale = _float(entry['init_scale'], f'{where}.init_scale', positive = True)
         value = _float(entry['value'], f'{where}.value') if entry.get('value') is not None else None
         limits = _limits_text(name, model)
-        if vary:
+        if vary: # a free parameter: a complete prior, inside the hard limits
             if prior in ('uniform', 'loguniform') and bounds is None:
                 raise ConfigError(f'{where}: a {prior} prior needs bounds = [lo, hi]')
             if prior == 'loguniform' and bounds[0] <= 0:
@@ -407,7 +596,7 @@ def _params(raw, model, warnings):
                 raise ConfigError(f'{where}.bounds = {bounds} lie outside the valid range {limits} of {name}')
             if prior == 'normal' and bounds is None and not within_limits(name, mu, model):
                 raise ConfigError(f'{where}.mu = {mu:g} lies outside the valid range {limits} of {name}')
-            if value is None:
+            if value is None: # the centre of the prior, where init = 'ball' and check start
                 if prior == 'normal' and (bounds is None or bounds[0] <= mu <= bounds[1]):
                     value = mu
                 elif prior == 'loguniform':
@@ -416,7 +605,7 @@ def _params(raw, model, warnings):
                     value = 0.5*(bounds[0] + bounds[1])
             elif bounds is not None and not bounds[0] <= value <= bounds[1]:
                 raise ConfigError(f'{where}.value = {value:g} lies outside its bounds {bounds}')
-        else:
+        else: # fixed: the value given, else the registry default
             prior = 'fixed'
             if value is None:
                 value = reg['default']
@@ -427,6 +616,7 @@ def _params(raw, model, warnings):
         out[name] = {'vary': vary, 'value': value, 'prior': prior, 'bounds': bounds, 'mu': mu, 'sigma': sigma,
                      'init_scale': init_scale, 'unit': reg['unit'], 'label': reg['label']}
 
+    # The legacy recipe of isofate_MCMC.py has only an O/H enhancement
     if model['composition'] == 'legacy':
         for name in ('log_metallicity', 'log_CtoH_enhancement'):
             if out[name]['vary'] or out[name]['value'] != 0:
@@ -448,18 +638,25 @@ def _params(raw, model, warnings):
 
 def _xuv_step_warning(cfg, warnings):
     '''
-    A warning when the step-function XUV drops inside the age prior: ages just below t_sat still see the
-    saturated flux today, which can make a separate, narrow mode of the posterior.
+    Warns when the step-function XUV flux drops inside the age prior
+    With step_fn = true the XUV flux stays at F0 until t_sat and then drops to F_final. Ages just below t_sat
+    still see the saturated flux today, which can make a separate, narrow mode of the posterior that prior draws
+    rarely hit (on LHS 1140 b a 28-Myr sliver of ages below t_sat made a spurious second mode). Checked only for
+    an XUV mechanism with a free age and a fixed t_sat.
+
+    Inputs:
+        - cfg: the cfg dict being built, with planet, model and params [dict]
+        - warnings: list the warning is appended to [list]
     '''
     m, p = cfg['model'], cfg['params']
     age, t_sat = p['age'], p['t_sat']
     if not m['step_fn'] or 'XUV' not in m['mechanism'] or not age['vary'] or t_sat['vary']:
         return
-    lo, hi = age['bounds'] if age['bounds'] is not None else hard_limits('age', m)[:2]
-    if not lo < t_sat['value'] < hi:
+    lo, hi = age['bounds'] if age['bounds'] is not None else hard_limits('age', m)[:2] # [yr]; no bounds: (t0, MAX_AGE]
+    if not lo < t_sat['value'] < hi: # every age of the prior sees the same side of the drop
         return
     F0, F_final = cfg['planet']['Fp']*10**p['log_F0_ratio']['value'], p['F_final']['value'] # [W/m2]
-    ratio = f' ({F0/F_final:.3g}x)' if F_final > 0 else ''
+    ratio = f' ({F0/F_final:.3g}x)' if F_final > 0 else '' # the size of the drop
     below = 100*(t_sat['value'] - lo)/(hi - lo) # [%] of the age prior before the drop
     warnings.append(f"step_fn = true: the XUV flux drops from F0 = {F0:.3g} to F_final = {F_final:.3g} W/m2{ratio} at "
                     f"t_sat = {t_sat['value']:.4g} yr, inside the age prior [{lo:.4g}, {hi:.4g}] yr. Ages below t_sat "
@@ -469,6 +666,10 @@ def _xuv_step_warning(cfg, warnings):
 
 
 def _sigma(value, where):
+    '''
+    Returns a sigma: a positive number, or a (lo, hi) tuple of positive numbers for asymmetric errors (lo applies
+    when the model lies below the data, hi above)
+    '''
     if isinstance(value, (list, tuple)):
         if len(value) != 2:
             raise ConfigError(f'{where} must be a number or [lo, hi], got {value!r}')
@@ -477,6 +678,29 @@ def _sigma(value, where):
 
 
 def _observables(raw, cfg, warnings):
+    '''
+    Validates the [observables.NAME] tables and keeps the active ones (use = true), in registry order
+    An active observable needs value and sigma; value must be finite, and > 0 in log10 space (sigma is then in
+    dex). An observable that needs Atmodeller is an error with n_atmodeller = 0. Warns for T_surf (not directly
+    observable) and for the Mp or age observable on a fixed parameter (it only adds a constant). Inactive tables
+    are checked for unknown keys too, so a typo never goes unnoticed.
+
+    Inputs:
+        - raw: the raw [observables] table [dict]
+        - cfg: the cfg dict being built, with model and params [dict]
+        - warnings: list the warnings are appended to [list]
+
+    Output: {name: entry} for the active observables [dict]; each entry holds
+        - use: True [Bool]
+        - value: the data, in the registry unit (also in log10 space)
+        - sigma: a number or (lo, hi); in the unit of value in linear space, in dex in log10 space
+        - space: 'linear' or 'log10' [str]
+        - kind: 'detection', 'upper' or 'lower' (a one-sided limit at value with width sigma) [str]
+        - floor, ceiling: log10-space clipping range of the model value; ceiling 1/floor unless the registry
+          sets one, inf for floor 0
+        - sigma_model: extra model error, added in quadrature, in the space of sigma
+        - unit, label, needs_atmodeller, input: from the registry
+    '''
     _check_keys(raw, OBSERVABLES, '[observables]')
     out = {}
     for name, reg in OBSERVABLES.items():
@@ -485,7 +709,7 @@ def _observables(raw, cfg, warnings):
         where = f'observables.{name}'
         entry = raw[name]
         _check_keys(entry, OBS_KEYS, f'[{where}]')
-        if not _bool(entry.get('use', False), f'{where}.use'):
+        if not _bool(entry.get('use', False), f'{where}.use'): # inactive: may omit value and sigma
             continue
         for key in ('value', 'sigma'):
             if entry.get(key) is None:
@@ -496,6 +720,7 @@ def _observables(raw, cfg, warnings):
         sigma = _sigma(entry['sigma'], f'{where}.sigma')
         space = _choice(entry.get('space', 'linear'), 'space', f'{where}.space')
         kind = _choice(entry.get('kind', 'detection'), 'kind', f'{where}.kind')
+        # A config's floor overrides the registry's
         floor = _float(entry.get('floor', reg['floor']), f'{where}.floor', nonnegative = True)
         sigma_model = _float(entry.get('sigma_model', 0.0), f'{where}.sigma_model', nonnegative = True)
         if space == 'log10' and value <= 0:
@@ -507,6 +732,7 @@ def _observables(raw, cfg, warnings):
             warnings.append('T_surf is the surface temperature at the base of the adiabat: not directly observable')
         if reg['input'] and name in cfg['params'] and not cfg['params'][name]['vary']:
             warnings.append(f'observable {name} compares to a fixed parameter: it only adds a constant')
+        # 1/floor caps the inf of a ratio x/0; it follows the floor in use, so a config's own floor moves it too
         ceiling = reg['ceiling'] if reg['ceiling'] is not None else (1/floor if floor > 0 else inf)
         out[name] = {'use': True, 'value': value, 'sigma': sigma, 'space': space, 'kind': kind, 'floor': floor,
                      'ceiling': ceiling, 'sigma_model': sigma_model, 'unit': reg['unit'], 'label': reg['label'],
@@ -516,7 +742,17 @@ def _observables(raw, cfg, warnings):
 
 def _section(raw, defaults, where):
     '''
-    Fills defaults and coerces each value to the type of its default.
+    Validates a plain section: fills in the defaults and coerces each value to the type of its default
+    bool, int and float defaults go through _bool, _int and _float; a list default takes a list of whole numbers,
+    which must not be empty unless its key is in EMPTY_LISTS. String defaults (e.g. nwalkers = 'auto') are left to
+    the caller.
+
+    Inputs:
+        - raw: the raw table [dict]
+        - defaults: the defaults of the section, e.g. SAMPLER_DEFAULTS [dict]
+        - where: the table, for the messages, e.g. '[sampler]' [str]
+
+    Output: the section settings [dict]
     '''
     _check_keys(raw, defaults, where)
     out = dict(defaults)
@@ -524,7 +760,7 @@ def _section(raw, defaults, where):
     for key, default in defaults.items():
         name = f'{where.strip("[]")}.{key}'
         value = out[key]
-        if isinstance(default, bool):
+        if isinstance(default, bool): # before int: bool is a subclass of int
             out[key] = _bool(value, name)
         elif isinstance(default, int):
             out[key] = _int(value, name)
@@ -542,7 +778,8 @@ def _section(raw, defaults, where):
 
 def _registry_name(value, registry, where):
     '''
-    A parameter or observable name of a registry, with a suggestion when misspelt.
+    Returns value if it names an entry of registry (PARAMS or OBSERVABLES), else raises ConfigError suggesting
+    the closest name
     '''
     if isinstance(value, str) and value in registry:
         return value
@@ -553,9 +790,16 @@ def _registry_name(value, registry, where):
 
 def bisect_target(cfg, s = None):
     '''
-    (param, observable) of the bisection initializer (sampler.bisect_param, sampler.bisect_observable), checked:
-    the parameter must be free and the observable active and computed by the model (not an input).
-    s: the [sampler] settings, default cfg['sampler'].
+    Returns the target of the bisection initializer (init = 'bisect'), checked
+    The bisection moves sampler.bisect_param of prior draws until sampler.bisect_observable matches its data, so
+    the parameter must be free and the observable active and computed by the model (not an input); else
+    ConfigError.
+
+    Inputs:
+        - cfg: the cfg dict [dict]
+        - s: the [sampler] settings; default cfg['sampler'] (_sampler passes its own before that exists) [dict]
+
+    Output: (param, observable) [tuple]
     '''
     s = cfg['sampler'] if s is None else s
     param, name = s['bisect_param'], s['bisect_observable']
@@ -569,43 +813,58 @@ def bisect_target(cfg, s = None):
     return param, name
 
 
+###_____Solve mode_____###
+
 def u_name(observable):
     '''
-    Name of the sampled coordinate of solve mode: u_<observable>.
+    Returns the name of the sampled coordinate of solve mode, u_<observable> (e.g. u_Rp)
     '''
     return f'u_{observable}'
 
 
 def solve_on(cfg):
     '''
-    True when [solve] is active (configs saved before solve mode existed have no [solve]: off).
+    Returns True when solve mode is on ([solve] param set); a cfg saved before solve mode existed has no [solve],
+    so it is off
     '''
     return bool(cfg.get('solve', {}).get('active'))
 
 
 def sampled_names(cfg):
     '''
-    The names of the sampler's coordinates (theta of the chain): the free parameters, with u_<observable> in place
-    of the solved parameter in solve mode.
+    Returns the names of the sampler's coordinates (theta of the chain) [list]
+    These are the free parameters, with u_<observable> in place of the solved parameter in solve mode; a cfg saved
+    without cfg['sampled'] gives the free parameters.
     '''
     return list(cfg.get('sampled', cfg['free']))
 
 
 def _bare_core_warning(cfg, o, bounds, warnings):
     '''
-    Solve mode on Rp along log_f_atm: every log_f_atm that strips the planet gives Rp = the bare-core radius, a
-    plateau that cannot be inverted. Warns when the bare core over the Mp prior lies inside the u support, since
-    solve mode then leaves out the posterior mass of stripped planets.
+    Warns when solve mode on Rp along log_f_atm leaves out the stripped planets
+    Below the stripping edge (the initial log_f_atm under which the planet loses its whole atmosphere before the
+    end of the run) every log_f_atm gives Rp = the bare-core radius, (Mp/M_earth)^(1/4) R_earth (Lopez & Fortney
+    2014): a plateau of Rp, which cannot be inverted for log_f_atm. When the bare-core radius over the Mp prior
+    (its bounds, else the Mp value) reaches into the u support, solve mode leaves out the posterior mass of
+    stripped planets, which plain sampling includes. The warning gives how many sigma the bare core at the Mp
+    value lies from the Rp datum.
+
+    Inputs:
+        - cfg: the cfg dict being built [dict]
+        - o: the Rp observable, cfg['observables']['Rp'] [dict]
+        - bounds: the u support [lo, hi], in the likelihood space of Rp [list]
+        - warnings: list the warning is appended to [list]
     '''
     from isofate.constants import Me, Re
     from isofate.isofunks import R_core
     from isofate.mcmc import likelihood
     p = cfg['params']['Mp']
     masses = p['bounds'] if p['vary'] and p['bounds'] is not None else [p['value']]
-    cores = [R_core(m*Me)/Re for m in masses] # [R_earth]
-    if max(cores) < bounds[0] or min(cores) > bounds[1]:
+    cores = [R_core(m*Me)/Re for m in masses] # [R_earth]; R_core rises with Mp, so the ends of the prior suffice
+    if max(cores) < bounds[0] or min(cores) > bounds[1]: # the plateau lies outside the u support
         return
     core = R_core(p['value']*Me)/Re
+    # Distance of the bare core from the datum [sigma], with the sigma of the side it lies on
     d = (core - likelihood.observed(o))/likelihood.sigma_eff(o, above = core > likelihood.observed(o))
     span = f'{min(cores):.4g}-{max(cores):.4g} R_earth over the Mp prior' if len(cores) > 1 else f'{core:.4g} R_earth'
     warnings.append(f'solve mode on Rp along log_f_atm: a planet that loses its atmosphere has Rp = the bare-core '
@@ -618,9 +877,33 @@ def _bare_core_warning(cfg, o, bounds, warnings):
 
 def _solve(raw, cfg, warnings, notes):
     '''
-    [solve] (SPEC amendment 2): sample u = T(model value of `observable`) instead of the free parameter `param`.
-    Adds the derived keys active, index (of param in theta), name (u_<observable>), bounds (the support of u in
-    the likelihood space of the observable), label and unit; sets cfg['sampled'].
+    Validates [solve], the settings of solve mode
+    Solve mode samples u = T(model value of solve.observable), T the transform to its likelihood space (log10 for a
+    log10-space observable), in place of the free parameter solve.param, which each evaluation then solves for.
+    It is meant for one precise datum that pins one parameter to a thin, curved ridge, on which emcee's moves stall.
+    Sampling u instead of the parameter P changes the density by the Jacobian |dP*/du| at the root P*, which
+    solve.py adds, so the posterior over the physical parameters is unchanged (see "Solve mode" in the README). Off
+    when solve.param = "" (the default).
+    solve.param must be a free parameter and solve.observable an active observable computed by the model (not an
+    input); tol is a fraction of sigma in (0, 1), max_evals >= 6 and derivative 'forward' or 'central'.
+    The support of u is [v - k sigma_lo, v + k sigma_hi], v the datum in the likelihood space, sigma_lo and sigma_hi
+    its effective sigma on each side and k = solve.range_sigma: k = 6 drops only points whose term is below -18. A
+    limit keeps only its allowed side, [v - k sigma, v] (upper) or [v, v + k sigma] (lower), with a warning. Warns
+    too when the support reaches the log10 floor of the observable, and for Rp along log_f_atm when the bare-core
+    plateau lies inside it (_bare_core_warning).
+
+    Inputs:
+        - raw: the raw [solve] table [dict]
+        - cfg: the cfg dict being built, with free and observables; cfg['sampled'] is set here [dict]
+        - warnings: list the warnings are appended to [list]
+        - notes: list the notes (information, not warnings) are appended to [list]
+
+    Output: the solve settings [dict]: the keys of SOLVE_DEFAULTS (refit_steps sorted, without repeats), plus
+        - active: True in solve mode [Bool]
+        - index: position of param in cfg['free'], and of u in theta; None when off [int]
+        - name: u_<observable>; None when off [str]
+        - bounds: the support [lo, hi] of u, in the likelihood space of the observable; None when off [list]
+        - label, unit: axis label and unit of u (dex in log10 space); None when off [str]
     '''
     from isofate.mcmc import likelihood
     s = _section(raw, SOLVE_DEFAULTS, '[solve]') # refit_steps is a list of whole numbers from here on
@@ -630,8 +913,9 @@ def _solve(raw, cfg, warnings, notes):
     if s['derivative'] not in ('forward', 'central'):
         raise ConfigError(f"solve.derivative must be \"forward\" or \"central\", got {s['derivative']!r}")
     s['refit_steps'] = sorted({_int(k, 'solve.refit_steps', minimum = 1) for k in s['refit_steps']})
+    # The derived keys, None while solve mode is off
     s.update(active = bool(s['param']), index = None, name = None, bounds = None, label = None, unit = None)
-    cfg['sampled'] = list(cfg['free'])
+    cfg['sampled'] = list(cfg['free']) # u takes the place of param below
     if not s['active']:
         return s
     if not s['warm_start'] and 'refit_steps' in raw and s['refit_steps']:
@@ -652,6 +936,7 @@ def _solve(raw, cfg, warnings, notes):
     if not 0 < s['tol'] < 1:
         raise ConfigError(f"solve.tol must be in (0, 1) (a fraction of sigma), got {s['tol']:g}")
     s['max_evals'] = _int(s['max_evals'], 'solve.max_evals', minimum = 6)
+    # Support of u: range_sigma sigmas around the datum, in the likelihood space (sigma_model included)
     o = cfg['observables'][name]
     k, v = s['range_sigma'], likelihood.observed(o)
     s_lo, s_hi = likelihood.sigma_eff(o, above = False), likelihood.sigma_eff(o, above = True)
@@ -666,9 +951,11 @@ def _solve(raw, cfg, warnings, notes):
                         f"{bounds[1]:.4g}], between the limit and {k:g} sigma on its allowed side, so model values "
                         'beyond that, which the limit also allows, and the tail past the limit are cut away; solve '
                         'mode is meant for detections')
+    # Every model value below the floor is clipped to it: a plateau of T at log10(floor)
     if o['space'] == 'log10' and o['floor'] > 0 and bounds[0] <= math.log10(o['floor']):
         warnings.append(f'solve mode: the u range of {name} reaches its log10 floor ({o["floor"]:g}), where the model '
                         'value cannot be inverted; lower solve.range_sigma or the floor')
+    # With Rp_fixed the radius is constant: no bare-core plateau
     if name == 'Rp' and param == 'log_f_atm' and cfg['params']['Rp_fixed']['value'] is None:
         _bare_core_warning(cfg, o, bounds, warnings)
     reg = OBSERVABLES[name]
@@ -676,17 +963,39 @@ def _solve(raw, cfg, warnings, notes):
     s.update(param = param, observable = name, index = cfg['free'].index(param), name = u_name(name),
              bounds = bounds, label = ('log$_{10}$ ' if log else '') + reg['label'] + ' (sampled)',
              unit = 'dex' if log else reg['unit'])
-    cfg['sampled'][s['index']] = s['name']
+    cfg['sampled'][s['index']] = s['name'] # u in place of param in theta
     return s
 
 
+###_____Sampler, parallel and resolution_____###
+
 def _sampler(raw, cfg, warnings, notes):
+    '''
+    Validates [sampler], filling in SAMPLER_DEFAULTS
+    In solve mode init defaults to 'solve', and 'bisect' becomes 'solve' with a note; init = 'solve' without solve
+    mode is an error. nwalkers is 'auto' or an even number >= 2 ndim. The bisection names are always checked
+    against the registries; with init = 'bisect' also their roles (bisect_target), and a limit as the target gives
+    a warning, since the walkers then start on the boundary of the allowed region.
+    The convergence settings: tau, the integrated autocorrelation time, is about the number of steps between two
+    independent samples of a walker (Sokal 1997). It is estimated every check_every steps, and with
+    stop_on_convergence the run stops once it has at least min_steps steps, more than n_tau max(tau), and tau has
+    changed by less than max(tau_rtol, its statistical noise) at tau_checks checks in a row. The summary discards
+    the first burn_factor max(tau) steps (at most half the chain) as burn-in.
+
+    Inputs:
+        - raw: the raw [sampler] table [dict]
+        - cfg: the cfg dict being built, with free, observables and solve [dict]
+        - warnings: list the warnings are appended to [list]
+        - notes: list the notes (information, not warnings) are appended to [list]
+
+    Output: the sampler settings, the keys of SAMPLER_DEFAULTS [dict]
+    '''
     ndim = len(cfg['free'])
     s = _section(raw, SAMPLER_DEFAULTS, '[sampler]')
     if solve_on(cfg):
         if 'init' not in raw:
             s['init'] = 'solve' # the default in solve mode
-        elif s['init'] == 'bisect':
+        elif s['init'] == 'bisect': # the solve-mode init already starts every walker on a root
             s['init'] = 'solve'
             notes.append("sampler.init = 'bisect' is redundant in solve mode: init = 'solve' is used (draws of the "
                          'other parameters, u from the data distribution, each solved for '
@@ -694,12 +1003,15 @@ def _sampler(raw, cfg, warnings, notes):
     elif s['init'] == 'solve':
         raise ConfigError("sampler.init = 'solve' needs solve mode: set [solve] param (e.g. param = \"log_f_atm\", "
                           'observable = "Rp")')
+    # emcee's ensemble moves update one group of walkers from the others (two halves for DE and stretch; Goodman &
+    # Weare 2010, Foreman-Mackey et al 2013) and refuse fewer than 2 ndim walkers
     if s['nwalkers'] != 'auto':
         s['nwalkers'] = _int(s['nwalkers'], 'sampler.nwalkers')
         if s['nwalkers'] % 2 or s['nwalkers'] < 2*ndim:
             raise ConfigError(f"sampler.nwalkers = {s['nwalkers']} must be even and >= 2*ndim = {2*ndim}")
     _choice(s['moves'], 'moves', 'sampler.moves')
     _choice(s['init'], 'init', 'sampler.init')
+    # _section made these whole numbers or floats already: only their ranges are checked here
     for key in ('max_steps', 'checkpoint_every', 'print_every', 'prescan_factor', 'check_every', 'bisect_iters',
                 'tau_checks'):
         _int(s[key], f'sampler.{key}', minimum = 1)
@@ -708,6 +1020,7 @@ def _sampler(raw, cfg, warnings, notes):
     _int(s['track_points'], 'sampler.track_points', minimum = 2)
     for key in ('n_tau', 'tau_rtol', 'burn_factor'):
         _float(s[key], f'sampler.{key}', nonnegative = True)
+    # Misspelt names fail now, even when init is not 'bisect'
     _registry_name(s['bisect_param'], PARAMS, 'sampler.bisect_param')
     _registry_name(s['bisect_observable'], OBSERVABLES, 'sampler.bisect_observable')
     if s['bisect_draws'] != 'auto':
@@ -723,6 +1036,10 @@ def _sampler(raw, cfg, warnings, notes):
 
 
 def _parallel(raw):
+    '''
+    Validates [parallel], filling in PARALLEL_DEFAULTS: workers >= 1 and max_memory_gb > 0, the memory budget of
+    all workers [GB] (the pool lowers the worker count to fit it)
+    '''
     p = _section(raw, PARALLEL_DEFAULTS, '[parallel]')
     _int(p['workers'], 'parallel.workers', minimum = 1)
     _float(p['max_memory_gb'], 'parallel.max_memory_gb', positive = True)
@@ -730,6 +1047,21 @@ def _parallel(raw):
 
 
 def _resolution(raw, model):
+    '''
+    Validates [resolution], the settings of the resolution study (python -m isofate.mcmc resolution), filling in
+    RESOLUTION_DEFAULTS
+    The study runs test points at every (n_steps, n_atmodeller) cell of a grid and compares each cell with the
+    finest one, in units of the measurement sigmas (see "Choosing n_steps and n_atmodeller" in the README). Every
+    n_steps of the grid is >= 1 and at most MAX_N_STEPS unless model.allow_large_n_steps; every n_atmodeller >= 0;
+    points >= 1; source one of RESOLUTION_SOURCES or 'chain:RUN_DIR'; tol, dlogl_tol, max_eval_seconds and
+    shift_tol > 0; perturb >= 0.
+
+    Inputs:
+        - raw: the raw [resolution] table [dict]
+        - model: the model settings (_model) [dict]
+
+    Output: the resolution settings, the keys of RESOLUTION_DEFAULTS [dict]
+    '''
     r = _section(raw, RESOLUTION_DEFAULTS, '[resolution]')
     for n in r['n_steps']:
         _int(n, 'resolution.n_steps', minimum = 1)
@@ -749,20 +1081,29 @@ def _resolution(raw, model):
     return r
 
 
+# Test-point sources of a resolution study; 'chain:RUN_DIR' (posterior samples of a run) is allowed too
 RESOLUTION_SOURCES = ('auto', 'prescan', 'prior', 'bisect', 'solve')
 
 
 def resolution_source(cfg, source = None, solve = None):
     '''
-    The test-point source of a resolution study: source, else resolution.source. 'auto' is 'solve' for a study in
-    solve mode (solve: default solve_on(cfg)); else 'bisect' when sampler.init is 'bisect' or 'solve' (the test
-    points then sit where the walkers start), else 'prescan'.
+    Returns the test-point source of a resolution study, checked
+    'auto' is 'solve' for a study in solve mode; else 'bisect' when sampler.init is 'bisect' or 'solve' (the test
+    points then sit where the walkers start), else 'prescan'. 'solve' needs a study in solve mode and 'bisect' one
+    without it; 'bisect' also needs a valid bisection target (bisect_target). Anything else raises ConfigError.
+
+    Inputs:
+        - cfg: the cfg dict [dict]
+        - source: the source asked for (--source); default resolution.source [str]
+        - solve: True for a study in solve mode (--solve, --no-solve); default solve_on(cfg) [Bool]
+
+    Output: 'prescan', 'prior', 'bisect', 'solve' or 'chain:RUN_DIR' [str]
     '''
     solve = solve_on(cfg) if solve is None else bool(solve)
     source = cfg['resolution']['source'] if source is None else str(source)
     if source == 'auto':
         source = 'solve' if solve else 'bisect' if cfg['sampler']['init'] in ('bisect', 'solve') else 'prescan'
-    if source not in RESOLUTION_SOURCES[1:] and not source.startswith('chain:'):
+    if source not in RESOLUTION_SOURCES[1:] and not source.startswith('chain:'): # 'auto' is resolved by now
         raise ConfigError(f"source must be 'prescan', 'prior', 'bisect', 'solve' or 'chain:RUN_DIR', got {source!r}")
     if source == 'solve' and not solve:
         raise ConfigError("source = 'solve' needs a study in solve mode ([solve] param set, without --no-solve)")
@@ -770,7 +1111,7 @@ def resolution_source(cfg, source = None, solve = None):
         raise ConfigError("source = 'bisect' is for studies without solve mode: use --source solve (the default), or "
                           '--no-solve')
     if source == 'bisect':
-        bisect_target(cfg)
+        bisect_target(cfg) # a bad bisection target fails before any model run
     return source
 
 
@@ -778,13 +1119,37 @@ def resolution_source(cfg, source = None, solve = None):
 
 def normalize(raw, config_path = None):
     '''
-    The normalized cfg dict from a raw TOML dict (see the module docstring and SPEC section 2).
+    Validates a raw TOML dict and returns the normalized cfg dict
+    Works on a copy of raw. The sections are validated in the order they depend on each other: star, planet (needs
+    the star mass and luminosity), model, params (need the model settings for their hard limits), observables,
+    solve, sampler (its init depends on solve mode), parallel, resolution. Warns when output_root lies inside the
+    IsoFATE git checkout, when no parameter is free and when no observable is active (the posterior is the prior).
+
+    Inputs:
+        - raw: the TOML as a dict, overrides already applied [dict]
+        - config_path: path of the config file; None for a raw dict, which takes the name 'run' and the working
+          directory as the base of relative paths [str]
+
+    Output: cfg [dict]
+        - name: run name, used in paths (letters, digits and _.+-); default the file stem [str]
+        - description [str]
+        - config_path: absolute path of the config, or None [str]
+        - output_root: absolute path of the results folder [str]
+        - star, planet: the SI settings of _star and _planet [dict]
+        - model, solve, sampler, parallel, resolution: the validated sections [dict]
+        - params: every registry parameter (_params) [dict]
+        - free: names of the free parameters, in theta order [list]
+        - sampled: names of the sampler's coordinates, u_<observable> in place of the solved parameter [list]
+        - observables: the active observables (_observables) [dict]
+        - overrides: [] here; load_config records the --set strings [list]
+        - warnings: messages shown before a run [list]
+        - notes: information, not warnings (printed by check, logged by run) [list]
     '''
     raw = copy.deepcopy(raw)
     _check_keys(raw, TOP_KEYS, 'the top level')
     warnings = []
     config_path = os.path.abspath(config_path) if config_path else None
-    base = os.path.dirname(config_path) if config_path else os.getcwd()
+    base = os.path.dirname(config_path) if config_path else os.getcwd() # relative paths start here
     stem = os.path.splitext(os.path.basename(config_path))[0] if config_path else 'run'
     name = raw.get('name', stem)
     if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_.+-]+', name):
@@ -792,6 +1157,7 @@ def normalize(raw, config_path = None):
     cfg = {'name': name, 'description': str(raw.get('description', '')), 'config_path': config_path,
            'output_root': _output_root(raw.get('output_root'), base)}
     repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # the IsoFATE checkout
+    # Results inside a git checkout clutter it; an installed package has no .git, so no warning then
     if os.path.isdir(os.path.join(repo, '.git')) and (cfg['output_root'] + os.sep).startswith(repo + os.sep):
         warnings.append(f"output_root {cfg['output_root']} is inside the IsoFATE repository (output_root "
                         f"{'not set: ./mcmc_results' if 'output_root' not in raw else 'in the config'}); set "
@@ -800,7 +1166,7 @@ def normalize(raw, config_path = None):
     cfg['planet'] = _planet(raw.get('planet', {}), cfg['star'], warnings)
     cfg['model'] = _model(raw.get('model', {}), warnings)
     cfg['params'] = _params(raw.get('params', {}), cfg['model'], warnings)
-    cfg['free'] = [name for name in PARAMS if cfg['params'][name]['vary']]
+    cfg['free'] = [name for name in PARAMS if cfg['params'][name]['vary']] # theta order: the registry order
     _xuv_step_warning(cfg, warnings)
     cfg['observables'] = _observables(raw.get('observables', {}), cfg, warnings)
     notes = []
@@ -820,7 +1186,8 @@ def normalize(raw, config_path = None):
 
 def parse_value(text):
     '''
-    A TOML value from override text ('1e5', 'true', '[1, 2]', '"XUV"'); anything else is taken as a string.
+    Returns the TOML value of an override's text: '1e5' -> 1e5, 'true' -> True, '[1, 2]' -> [1, 2],
+    '"XUV"' -> 'XUV'; anything that is not a TOML value is taken as a string ('toy' -> 'toy')
     '''
     try:
         return tomllib.loads(f'v = {text}')['v']
@@ -829,11 +1196,16 @@ def parse_value(text):
 
 
 def _override_items(overrides):
+    '''
+    Returns the overrides as (dotted key, value) pairs
+    The string values of a dict are parsed as TOML (parse_value), its other values kept. Each string of a list
+    must look like section.key=value, else ConfigError.
+    '''
     if isinstance(overrides, dict):
         return [(key, parse_value(value) if isinstance(value, str) else value) for key, value in overrides.items()]
     items = []
     for text in overrides:
-        key, sep, value = text.partition('=')
+        key, sep, value = text.partition('=') # at the first '=': a value may contain '=' itself
         if not sep or not key.strip():
             raise ConfigError(f"override {text!r} must look like section.key=value")
         items.append((key.strip(), parse_value(value.strip())))
@@ -842,13 +1214,21 @@ def _override_items(overrides):
 
 def apply_overrides(raw, overrides):
     '''
-    Sets dotted keys ('model.n_steps', 'params.age.bounds', ...) in the raw TOML dict, in place.
-    overrides: list of 'dotted.key=value' strings, or a dict {dotted_key: value}.
+    Sets dotted keys ('model.n_steps', 'params.age.bounds', ...) in the raw TOML dict, in place
+    Missing tables are created. A parameter written as a bare number (params.NAME = x) first becomes the table
+    {value = x}, so that params.NAME.vary=true works on it; any other key on the path that is not a table raises
+    ConfigError.
+
+    Inputs:
+        - raw: the raw TOML dict, changed in place [dict]
+        - overrides: list of 'dotted.key=value' strings (--set), or a dict {dotted_key: value}; None: none
+
+    Output: raw, the same dict [dict]
     '''
     for key, value in _override_items(overrides or []):
         parts = key.split('.')
         node = raw
-        for i, part in enumerate(parts[:-1]):
+        for i, part in enumerate(parts[:-1]): # walk down the tables of the path
             child = node.get(part)
             if child is None:
                 child = node[part] = {}
@@ -864,14 +1244,22 @@ def apply_overrides(raw, overrides):
 
 def _override_strings(overrides):
     '''
-    The overrides as 'key=value' strings with TOML values, which parse back as --set arguments.
+    Returns the overrides as 'key=value' strings with TOML values, which parse back as --set arguments (they go to
+    cfg['overrides'], and from there to config.json and the top of a run's config.toml)
     '''
     return [f'{key}={_toml_value(value)}' for key, value in _override_items(overrides or [])]
 
 
 def read_toml(path, overrides = None):
     '''
-    The raw TOML dict of a config file with the overrides applied (used by synth, which writes it back).
+    Reads a config file as a raw TOML dict, with the overrides applied (synth uses it to write the file back)
+    A TOML syntax error raises ConfigError with the file name and tomllib's message.
+
+    Inputs:
+        - path: the config file [str]
+        - overrides: as in apply_overrides
+
+    Output: the raw TOML dict [dict]
     '''
     with open(path, 'rb') as f:
         try:
@@ -883,7 +1271,16 @@ def read_toml(path, overrides = None):
 
 def load_config(path, overrides = None):
     '''
-    Loads, validates and normalizes a TOML config (or a raw dict with the same structure).
+    Loads, validates and normalizes a TOML config (or a raw dict with the same structure)
+    Every command that reads a TOML config loads it here. The overrides are applied to the raw TOML before
+    validation and recorded in cfg['overrides'] as --set strings. A dict is copied first, so the caller's dict is
+    not changed.
+
+    Inputs:
+        - path: the config file, or a raw dict [str or dict]
+        - overrides: list of 'dotted.key=value' strings (--set), or a dict {dotted_key: value}; None: none
+
+    Output: the normalized cfg dict (see normalize) [dict]
     '''
     if isinstance(path, dict):
         raw, config_path = apply_overrides(copy.deepcopy(path), overrides), None
@@ -901,17 +1298,32 @@ MIN_AUTO_WALKERS = 16 # smaller ensembles mix poorly (8 walkers: DESnooker group
 
 def auto_nwalkers(ndim, workers, moves = 'de'):
     '''
-    max(4*ndim, 16) rounded up to a multiple of 4*workers when the moves include DESnooker (which maps the walkers
-    in 4 groups), else 2*workers, so every worker is busy in each map. 6 workers, 3-6 dims: 24; 1-2 workers and
-    up to 4 dims: 16.
+    Returns the automatic number of walkers (sampler.nwalkers = 'auto')
+    max(4*ndim, 16), rounded up to a multiple of 4*workers when the moves include DESnooker (moves = 'de'; it maps
+    the walkers in 4 groups), else of 2*workers (the two halves of the red-blue moves), so every worker is busy in
+    each map. 6 workers, 3-6 dims: 24; 1-2 workers and up to 4 dims: 16.
+
+    Inputs:
+        - ndim: number of free parameters [int]
+        - workers: number of worker processes [int]
+        - moves: sampler.moves [str]
+
+    Output: nwalkers [int]
     '''
-    step = 4*workers if moves == 'de' else 2*workers
+    step = 4*workers if moves == 'de' else 2*workers # every group of the ensemble a multiple of workers
     return int(math.ceil(max(4*ndim, MIN_AUTO_WALKERS)/step)*step)
 
 
 def choose_nwalkers(cfg, workers):
     '''
-    sampler.nwalkers, or the auto rule for the actual number of workers.
+    Returns the number of walkers of a run: sampler.nwalkers, or the auto rule for the actual number of workers
+    Raises ConfigError without free parameters, and for an odd number or fewer than 2 ndim walkers.
+
+    Inputs:
+        - cfg: the cfg dict [dict]
+        - workers: the number of workers the pool got (the memory budget can lower it) [int]
+
+    Output: nwalkers [int]
     '''
     ndim = len(cfg['free'])
     if ndim == 0:
@@ -927,6 +1339,10 @@ def choose_nwalkers(cfg, workers):
 ###_____Documentation_____###
 
 def _limits_doc(name):
+    '''
+    Returns the valid range of a parameter as README text, e.g. '(0, 1]', '>= 0' or 'any'; the ranges of Mp and
+    age depend on the model settings and are given in words
+    '''
     if name == 'Mp':
         lo, hi = melt_mass_range()
         return f'[{lo:g}, {hi:g}] with Atmodeller and no melt_fraction_override (melt grid), else > 0'
@@ -944,8 +1360,12 @@ def _limits_doc(name):
 
 def markdown_tables():
     '''
-    (params, observables): the README's markdown tables of the PARAMS and OBSERVABLES registries, so the
-    documentation cannot drift from the code (tests/test_mcmc_cli.py compares them).
+    Returns the README's markdown tables of the PARAMS and OBSERVABLES registries, so the documentation cannot
+    drift from the code (tests/test_mcmc_cli.py compares them with the README)
+
+    Output: (params, observables) [tuple]
+        - params: table of name, unit, default, valid range and meaning [str]
+        - observables: table of name, unit, definition, log10 floor and needs Atmodeller [str]
     '''
     rows = ['| name | unit | default | valid range | meaning |', '|---|---|---|---|---|']
     for name, p in PARAMS.items():
@@ -969,13 +1389,20 @@ def markdown_tables():
 
 def new_output_dir(base, first = 1):
     '''
-    Creates and returns a new directory (absolute path): base, else base_<first>, base_<first + 1>, ... Claimed
-    atomically (os.makedirs without exist_ok), so two processes started in the same second never share one.
+    Creates and returns a new output directory: base, else base_<first>, base_<first + 1>, ...
+    Claimed atomically (os.makedirs without exist_ok), so two processes started in the same second, whose base
+    carries the same time stamp, never share one.
+
+    Inputs:
+        - base: the directory wanted, e.g. <output_root>/<name>/mcmc_<stamp> [str]
+        - first: suffix of the first alternative [int]
+
+    Output: absolute path of the new directory [str]
     '''
     path, k = base, first
     while True:
         try:
-            os.makedirs(path)
+            os.makedirs(path) # also creates <output_root>/<name>; fails if another process got there first
             return os.path.abspath(path)
         except FileExistsError:
             path, k = f'{base}_{k}', k + 1
@@ -983,7 +1410,13 @@ def new_output_dir(base, first = 1):
 
 def empty_output_dir(path, what):
     '''
-    An explicitly given output directory: created if missing, refused (FileExistsError) if it holds files.
+    Returns an output directory given explicitly: created if missing, refused (FileExistsError) if not empty
+
+    Inputs:
+        - path: the directory [str]
+        - what: what writes there, for the message, e.g. 'a scan' [str]
+
+    Output: absolute path [str]
     '''
     if os.path.isdir(path) and os.listdir(path):
         raise FileExistsError(f'{path} exists and is not empty; {what} never overwrites one')
@@ -993,21 +1426,30 @@ def empty_output_dir(path, what):
 
 ###_____Writing_____###
 
-_BARE_KEY = re.compile(r'[A-Za-z0-9_-]+')
+_BARE_KEY = re.compile(r'[A-Za-z0-9_-]+') # TOML bare keys; any other key is written quoted
 
 
 def _toml_key(key):
+    '''
+    Returns key as a TOML key: bare when it may be, else a quoted string (TOML basic strings share the escapes of
+    json.dumps)
+    '''
     return key if _BARE_KEY.fullmatch(key) else json.dumps(key, ensure_ascii = False)
 
 
 def _toml_value(v):
-    if isinstance(v, (bool, np.bool_)):
+    '''
+    Returns v as TOML text, so that tomllib reads it back unchanged
+    Takes bool, int, float (nan and +-inf included), str, list, tuple, array and dict (an inline table, None
+    values left out), numpy scalars too; anything else raises TypeError. Floats keep their shortest exact form.
+    '''
+    if isinstance(v, (bool, np.bool_)): # before int: bool is a subclass of int
         return 'true' if v else 'false'
     if isinstance(v, (int, np.integer)):
         return str(int(v))
     if isinstance(v, (float, np.floating)):
         v = float(v)
-        if math.isnan(v):
+        if math.isnan(v): # TOML has nan, inf and -inf
             return 'nan'
         if math.isinf(v):
             return 'inf' if v > 0 else '-inf'
@@ -1018,18 +1460,31 @@ def _toml_value(v):
         return json.dumps(v, ensure_ascii = False)
     if isinstance(v, (list, tuple, np.ndarray)):
         return '[' + ', '.join(_toml_value(x) for x in v) + ']'
-    if isinstance(v, dict):
+    if isinstance(v, dict): # an inline table: a dict inside a list, or an override value
         return '{' + ', '.join(f'{_toml_key(k)} = {_toml_value(x)}' for k, x in v.items() if x is not None) + '}'
     raise TypeError(f'cannot write {v!r} ({type(v).__name__}) as TOML')
 
 
 def dump_toml(d):
     '''
-    Minimal TOML emitter for nested dicts of str/bool/int/float/list (None values are left out).
+    Returns d as TOML text: a minimal emitter for nested dicts of str, bool, int, float and lists (None values are
+    left out)
+    Each nested dict becomes a [table], written after the scalars of its parent, and a dict inside a list an inline
+    table; tomllib reads the text back to d (tested on the template and the example configs too).
+
+    Inputs:
+        - d: the dict to write [dict]
+
+    Output: TOML text, ending in a newline [str]
     '''
     lines = []
 
     def table(node, path):
+        '''
+        Appends one table to lines: its header, its scalars, then its subtables
+        A table with only subtables needs no header of its own; an empty one gets just the header, so that it
+        reads back as an empty table.
+        '''
         scalars = [(k, v) for k, v in node.items() if not isinstance(v, dict) and v is not None]
         tables = [(k, v) for k, v in node.items() if isinstance(v, dict)]
         if path and (scalars or not tables):
@@ -1043,6 +1498,9 @@ def dump_toml(d):
 
 
 def _json_default(x):
+    '''
+    json.dump fallback: numpy scalars become Python numbers and arrays lists; anything else raises TypeError
+    '''
     if isinstance(x, np.generic):
         return x.item()
     if isinstance(x, np.ndarray):
@@ -1052,7 +1510,14 @@ def _json_default(x):
 
 def save_resolved(cfg, path):
     '''
-    Writes cfg as JSON (tuples become lists; floats keep repr precision).
+    Writes the resolved cfg as JSON, e.g. a run's config.json
+    Tuples become lists (load_resolved turns the asymmetric sigmas back into tuples); floats keep repr precision,
+    so they read back exactly; inf and NaN are written as Infinity and NaN, which Python's json reads back. The
+    file is written to path.tmp first and then renamed, so a crash never leaves a half-written one.
+
+    Inputs:
+        - cfg: the cfg dict [dict]
+        - path: the JSON file [str]
     '''
     tmp = path + '.tmp'
     with open(tmp, 'w') as f:
@@ -1063,11 +1528,16 @@ def save_resolved(cfg, path):
 
 def load_resolved(path):
     '''
-    Reads a cfg written by save_resolved, restoring asymmetric sigmas as tuples.
+    Reads a cfg written by save_resolved, e.g. a run's config.json, restoring the asymmetric sigmas as tuples
+
+    Inputs:
+        - path: the JSON file [str]
+
+    Output: the cfg dict [dict]
     '''
     with open(path) as f:
         cfg = json.load(f)
     for o in cfg['observables'].values():
-        if isinstance(o['sigma'], list):
+        if isinstance(o['sigma'], list): # JSON has no tuples
             o['sigma'] = tuple(o['sigma'])
     return cfg

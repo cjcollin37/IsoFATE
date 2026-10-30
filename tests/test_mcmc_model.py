@@ -1,6 +1,7 @@
 '''
-Tests of isofate.mcmc.model (isocalc inputs, observables, status codes, blobs, tracks), the toy backend and the
-worker pool. Tests marked slow run the real isocalc in this process, at n_steps = 2000.
+Tests of isofate.mcmc.model: the isocalc inputs of a parameter set, the observables of the final state, the status
+codes and blobs of an evaluation, and the posterior tracks; also the toy backend and the worker pool.
+Most tests run on the toy backend. Tests marked slow run the real isocalc in this process, at n_steps = 2000.
 '''
 
 from isofate.mcmc import env
@@ -24,7 +25,8 @@ from isofate.mcmc.pool import WorkerPool, choose_workers, est_worker_gb, worker_
 
 EXAMPLE = os.path.join(config.CONFIG_DIR, 'lhs1140b.toml')
 CENTRE = [-2.8, 5.6, 5e9] # log_f_atm, Mp [M_earth], age [yr]
-STRIPPED = [-6.0, 5.6, 5e9]
+STRIPPED = [-6.0, 5.6, 5e9] # an atmosphere this small is lost before 5 Gyr
+# the composition observables: NaN once the atmosphere is gone
 COMPOSITION = ('H_He', 'C_O', 'D_H', 'mmw', 'T_surf') + tuple(f'VMR_{mol}' for mol in model.MOLECULES)
 
 
@@ -35,7 +37,14 @@ RP_ONLY = ['params.eps.vary=false', 'observables.outflow_H_fraction.use=false', 
 
 def example(*overrides, backend = 'toy'):
     '''
-    The lhs1140b example (radius and mass only) with a wider log_f_atm prior, no compile caches and no warm-up.
+    The LHS 1140 b example reduced to its radius and mass fit (RP_ONLY), with a wider log_f_atm prior, [-7, -1],
+    that reaches stripped planets, and without compile caches or warm-up
+
+    Inputs:
+        - overrides: more --set overrides [str]
+        - backend: 'toy' or 'isocalc' [str]
+
+    Output: the resolved config [dict]
     '''
     return config.load_config(EXAMPLE, [f'model.backend={backend}', 'parallel.cache=false', 'parallel.warmup=false',
                                         'params.log_f_atm.bounds=[-7, -1]', *RP_ONLY, *overrides])
@@ -44,7 +53,8 @@ def example(*overrides, backend = 'toy'):
 @pytest.fixture
 def worker_globals():
     '''
-    Restores the worker globals that init_worker and the status-5 tests set.
+    Restores the worker globals of model (_CFG, _RUN_DIR, _N_UNEXPECTED), which init_worker and the status-5 tests
+    set, so that the tests stay independent.
     '''
     saved = model._CFG, model._RUN_DIR, model._N_UNEXPECTED
     yield
@@ -53,7 +63,8 @@ def worker_globals():
 
 ###_____isocalc inputs_____###
 
-# scratchpad parallel/common.py run_eval (isofate_MCMC.py:139-149) at Mp = 5.6 M_earth
+# the initial inventories N_X [atoms] and mean particle mass mu [kg] of the composition recipe of isofate_MCMC.py
+# (lines 139-149) at Mp = 5.6 M_earth, for (log_f_atm, log_OtoH_enhancement)
 LEGACY_REFERENCE = {
     (-2.8, 0.0): {'N_H': 2.2526852795748566e+49, 'N_He': 2.2189469206995597e+48, 'N_D': 4.433989440316896e+44,
                   'N_O': 1.3256257089607216e+46, 'N_C': 6.628128544803608e+45, 'N_N': 1.8284492537389264e+45,
@@ -68,6 +79,10 @@ LEGACY_REFERENCE = {
 
 
 def test_legacy_composition_reproduces_common():
+    '''
+    Checks that the legacy composition reproduces, bit for bit, the initial inventories of the recipe of
+    isofate_MCMC.py (LEGACY_REFERENCE), and that the other isocalc arguments are the ones that script passes.
+    '''
     cfg = example(backend = 'isocalc')
     for (log_f_atm, log_O), ref in LEGACY_REFERENCE.items():
         params = prm.theta_to_params([log_f_atm, 5.6, 5e9], cfg)
@@ -75,7 +90,8 @@ def test_legacy_composition_reproduces_common():
         args, kwargs = model.planet_inputs(params, cfg)
         for key, value in ref.items():
             assert kwargs[key] == value, (log_f_atm, log_O, key) # bit for bit
-    # the other inputs of isofate_MCMC.py / common.py
+    # the other inputs, as isofate_MCMC.py passes them: (f_atm, Mp [kg], Mstar [kg], F0 [W/m2], Fp [W/m2], T [K],
+    # d [m], age [yr]) of the last point above, then the mechanism and rad_evol
     assert args[:8] == (1e-4, 5.6*c.Me, 0.18*c.Ms, 0.5876283244560114, 587.6283244560115, 225.61341420087453,
                         14035292576.12045, 5e9)
     assert args[8:] == ('XUV', True)
@@ -85,14 +101,21 @@ def test_legacy_composition_reproduces_common():
                     beta = -1.23, n_atmodeller = 100, save_molecules = False, mantle_iron_dict = False,
                     dynamic_phi = True)
     assert {key: kwargs[key] for key in expected} == expected
+    # the saturation time of isofate_MCMC.py, (5.9 - 15.4 Mstar/M_sun) Gyr
     assert kwargs['t_sat'] == pytest.approx((5.9 - 15.4*0.18)*1e9, rel = 1e-15)
 
 
 def test_ratios_composition():
+    '''
+    Checks the ratios composition: the initial inventories add up to the atmosphere's mass, mu is its mean particle
+    mass, and each number ratio X/H is the one requested (protosolar He/H, solar D/H, and O, C, N, S protosolar
+    times Z = 10**log_metallicity, with the extra O/H and C/H enhancements). Also the n_steps, n_atmodeller and
+    save_molecules arguments of planet_inputs, and that isocalc gets its own copy of mantle_iron.
+    '''
     cfg = example('model.composition="ratios"', 'params.log_metallicity=0.5', 'params.log_OtoH_enhancement=0.3',
                   'params.log_CtoH_enhancement=-0.2', 'model.mantle_iron={type = "static", Fe_mass_fraction = 0.1}')
     params = prm.theta_to_params(CENTRE, cfg)
-    M_atm = 5.6*c.Me*10**-2.8
+    M_atm = 5.6*c.Me*10**-2.8 # [kg]
     N, mu = model.composition(params, cfg, M_atm)
     assert sum(N[X]*model.MU[X] for X in model.SPECIES) == pytest.approx(M_atm, rel = 1e-13)
     assert mu == pytest.approx(M_atm/sum(N.values()), rel = 1e-15)
@@ -105,29 +128,41 @@ def test_ratios_composition():
     assert (kwargs['n_steps'], kwargs['n_atmodeller'], kwargs['save_molecules']) == (3000, 30, True)
     assert kwargs['mantle_iron_dict'] == cfg['model']['mantle_iron']
     assert kwargs['mantle_iron_dict'] is not cfg['model']['mantle_iron'] # isocalc mutates it
+    # T: the equilibrium temperature at the default albedo 0; F0 = Fp*10**log_F0_ratio, log_F0_ratio = -3
     assert args[5] == EqTemp(cfg['planet']['Fp'], A = 0.0) and args[3] == cfg['planet']['Fp']*1e-3
 
 
 ###_____Status codes and blobs (toy backend)_____###
 
 def test_blob_schema():
+    '''
+    Checks the layout of the blobs emcee stores with every sample: unique fields; status, runtime, log_prior and
+    log_like first, then every registry observable, the extras, and the three solve-mode fields last; all float64,
+    and NAN_BLOB all NaN.
+    '''
     assert len(set(model.BLOB_FIELDS)) == len(model.BLOB_FIELDS)
     assert model.BLOB_FIELDS[:4] == ('status', 'runtime', 'log_prior', 'log_like')
     assert model.BLOB_FIELDS[4:4 + len(config.OBSERVABLES)] == tuple(config.OBSERVABLES)
     assert model.BLOB_FIELDS[-8:-3] == ('exhausted', 't_lost', 'Matm', 'subcritical', 'n_atmod_calls')
-    assert model.BLOB_FIELDS[-3:] == ('solve_value', 'solve_evals', 'log_jac') # solve mode (SPEC amendment 2)
+    assert model.BLOB_FIELDS[-3:] == ('solve_value', 'solve_evals', 'log_jac') # solve mode: P*, runs, ln|dP*/du|
     assert model.blob_dtype() == [(f, 'f8') for f in model.BLOB_FIELDS]
     assert len(model.NAN_BLOB) == len(model.BLOB_FIELDS) and all(math.isnan(x) for x in model.NAN_BLOB)
 
 
 def test_statuses(tmp_path, monkeypatch, worker_globals):
+    '''
+    Checks the status code of each kind of evaluation: 0 ok; 1 outside the prior (no model run); 3 when the input
+    terms alone are -inf (no model run) or the data rule the result out (C/O detected in a stripped atmosphere);
+    4 for invalid inputs (N_H <= 0 in the legacy composition); 2 for the expected model failures; 5 for any other
+    exception, a bug, with its traceback in worker_errors/<pid>.log. A bug in extract is a 5, never a 2.
+    '''
     cfg = example()
     ok = model.evaluate(CENTRE, cfg)
     assert ok['status'] == model.OK and math.isfinite(ok['lp']) and ok['runtime'] > 0 and ok['error'] is None
     assert ok['lp'] == ok['log_prior'] + ok['log_like'] and set(ok['terms']) == {'Mp', 'Rp'}
     assert set(ok['obs']) == set(model.OBS_FIELDS) and ok['params']['Mp'] == 5.6
 
-    outside = model.evaluate([-2.8, 7.0, 5e9], cfg)
+    outside = model.evaluate([-2.8, 7.0, 5e9], cfg) # Mp above its prior, [4.5, 6.7]
     assert outside['status'] == model.OUTSIDE_PRIOR and outside['lp'] == -math.inf and outside['runtime'] == 0
     assert all(math.isnan(v) for v in outside['obs'].values())
 
@@ -141,9 +176,10 @@ def test_statuses(tmp_path, monkeypatch, worker_globals):
     assert stripped['status'] == model.NO_LIKELIHOOD and stripped['lp'] == -math.inf and stripped['runtime'] > 0
     assert stripped['obs']['exhausted'] == 1 and stripped['terms']['C_O'] == -math.inf
 
-    invalid = model.evaluate(CENTRE, example('params.log_OtoH_enhancement=2.1'))
+    invalid = model.evaluate(CENTRE, example('params.log_OtoH_enhancement=2.1')) # N_H < 0 above 2.03
     assert invalid['status'] == model.INVALID_INPUTS and 'N_H' in invalid['error']
 
+    # a stand-in with the name of JAX's runtime error, which counts as a model failure
     class XlaRuntimeError(Exception):
         pass
 
@@ -155,7 +191,7 @@ def test_statuses(tmp_path, monkeypatch, worker_globals):
         res = model.evaluate(CENTRE, cfg)
         assert res['status'] == model.MODEL_FAILED and type(error).__name__ in res['error']
 
-    model._RUN_DIR = str(tmp_path)
+    model._RUN_DIR = str(tmp_path) # where the tracebacks of status 5 go
     for error in (KeyError('n_H2_a'), TypeError(), NameError(), AttributeError(), IndexError(), ImportError()):
         def fail(*a, error = error):
             raise error
@@ -163,7 +199,7 @@ def test_statuses(tmp_path, monkeypatch, worker_globals):
         assert model.evaluate(CENTRE, cfg)['status'] == model.UNEXPECTED
     log = tmp_path/'worker_errors'/f'{os.getpid()}.log'
     assert log.exists() and 'KeyError' in log.read_text() and 'ImportError' in log.read_text()
-    monkeypatch.undo()
+    monkeypatch.undo() # the real run_model again
 
     def broken_extract(*a, **k):
         raise ValueError('a bug in extract')
@@ -172,6 +208,12 @@ def test_statuses(tmp_path, monkeypatch, worker_globals):
 
 
 def test_log_prob_and_eval_task(worker_globals):
+    '''
+    Checks the functions a worker pool calls. log_prob needs init_worker first and returns (lp,) plus the blob, all
+    floats and equal to evaluate's; a rejected point has the same length. eval_task returns the evaluate result
+    without the solution, plus id, theta and, given a track grid, the track (NaN arrays when the model did not
+    run).
+    '''
     cfg = example()
     with pytest.raises(RuntimeError, match = 'init_worker'):
         model._CFG = None
@@ -186,12 +228,12 @@ def test_log_prob_and_eval_task(worker_globals):
     rejected = model.log_prob(np.array([-2.8, 7.0, 5e9]))
     assert rejected[0] == -math.inf and rejected[1] == model.OUTSIDE_PRIOR and len(rejected) == len(out)
 
-    grid = np.geomspace(1e6, 1e10, 40)
+    grid = np.geomspace(1e6, 1e10, 40) # [yr]
     task = model.eval_task({'theta': CENTRE, 'id': 3, 'track_grid': grid, 'save_molecules': True,
                             'n_steps': 5000, 'n_atmodeller': 50})
     assert task['id'] == 3 and task['theta'] == CENTRE and 'sol' not in task and task['status'] == 0
     assert set(task['track']) == set(model.TRACK_KEYS)
-    assert task['obs']['n_atmod_calls'] == 5000//50 + 1
+    assert task['obs']['n_atmod_calls'] == 5000//50 + 1 # one every 50 steps, plus the final call
     plain = model.eval_task({'theta': CENTRE})
     assert 'track' not in plain and plain['id'] is None and plain['obs'] == res['obs']
     nothing = model.eval_task({'theta': [-2.8, 7.0, 5e9], 'track_grid': grid})
@@ -199,6 +241,12 @@ def test_log_prob_and_eval_task(worker_globals):
 
 
 def test_extract_and_tracks_toy():
+    '''
+    Checks extract and make_track on the toy. At the centre: no exhaustion, VMRs summing to 1, Mdot >= Mdot_H > 0
+    and Teq = 225.61 K; the track has every key (N_X in float64, the rest float32), is NaN after the end of the
+    run, and has VMRs only with save_molecules. Stripped: fatm = Mdot = 0, Rp = the bare core, composition and
+    escape ratios NaN, t_lost before the age, and the composition NaN in the track from then on.
+    '''
     cfg = example()
     res = model.evaluate(CENTRE, cfg, save_molecules = True, return_sol = True)
     sol, obs = res['sol'], res['obs']
@@ -207,13 +255,13 @@ def test_extract_and_tracks_toy():
     assert sum(obs[f'VMR_{mol}'] for mol in model.MOLECULES) == pytest.approx(1, abs = 1e-12)
     assert obs['Mdot'] >= obs['Mdot_H'] > 0 and obs['Teq'] == pytest.approx(225.61, abs = 0.01)
 
-    grid = np.geomspace(1e6, 8e9, 60)
+    grid = np.geomspace(1e6, 8e9, 60) # [yr], past the age of 5 Gyr
     track = model.make_track(sol, grid, cfg)
     assert list(track) == list(model.TRACK_KEYS)
     for key, values in track.items():
         assert values.shape == grid.shape
         assert values.dtype == (np.float64 if key.startswith('N_') else np.float32)
-    after = grid > 5e9*(1 + 1e-5)
+    after = grid > 5e9*(1 + 1e-5) # after the run's last time, age + dt with dt = (age - t0)/n_steps
     assert np.isnan(track['Rp'][after]).all() and np.isfinite(track['Rp'][~after]).all()
     assert np.isfinite(track['N_H'][~after]).all() and track['N_H'][0] > 1e45 # would overflow float32
     vmr = sum(track[f'VMR_{mol}'] for mol in model.MOLECULES)
@@ -233,6 +281,12 @@ def test_extract_and_tracks_toy():
 
 
 def test_outflow_observables_toy():
+    '''
+    Checks the outflow observables on the toy: Mdot_HHe = Mdot_H + Mdot_He, the H and He number fractions of the
+    outflow add up to 1, and both are NaN without a wind. On hand-made fluxes an H-only wind gives exactly 1 and an
+    He-only one 0. Against the LHS 1140 b datum (0.00115) a pure H wind is finite but far off (a term of about -75)
+    and no wind is ruled out.
+    '''
     cfg = example()
     obs = model.evaluate(CENTRE, cfg)['obs']
     assert obs['Mdot_HHe'] == obs['Mdot_H'] + obs['Mdot_He'] and obs['Mdot'] >= obs['Mdot_HHe'] > 0
@@ -243,11 +297,11 @@ def test_outflow_observables_toy():
     # the definitions on hand-made fluxes: an H-only wind is exactly 1, an He-only one 0
     sol = model.evaluate(CENTRE, cfg, return_sol = True)['sol']
     params = prm.theta_to_params(CENTRE, cfg)
-    for Phi_H, Phi_He, x in ((3.0, 0.0, 1.0), (0.0, 2.0, 0.0), (1.0, 3.0, 0.25)):
+    for Phi_H, Phi_He, x in ((3.0, 0.0, 1.0), (0.0, 2.0, 0.0), (1.0, 3.0, 0.25)): # [atoms/m2/s]
         sol['Phi_H'][-1], sol['Phi_He'][-1] = Phi_H, Phi_He
         out = model.extract(sol, params, cfg)
         assert out['outflow_H_fraction'] == x and out['outflow_He_fraction'] == 1 - x
-        area = 4*np.pi*sol['Rp'][-1]**2
+        area = 4*np.pi*sol['Rp'][-1]**2 # [m2]
         assert out['Mdot_HHe'] == pytest.approx((Phi_H*c.mu_H + Phi_He*c.mu_He)*area, rel = 1e-14)
     track = model.make_track(sol, np.geomspace(1e6, 5e9, 30), cfg)
     assert track['outflow_H_fraction'].dtype == np.float32 and np.isfinite(track['Mdot_HHe']).all()
@@ -259,16 +313,25 @@ def test_outflow_observables_toy():
 
 
 def test_rp_fixed_toy():
+    '''
+    Checks Rp_fixed on the toy: isocalc gets Rp_override = Rp_fixed [m] with rad_evol False, and the radius stays
+    at Rp_fixed for the whole run. Unset, Rp_override is False (isocalc's own radius).
+    '''
     cfg = example('params.Rp_fixed=1.9')
     assert cfg['model']['rad_evol'] is False
     res = model.evaluate(CENTRE, cfg, return_sol = True)
     args, kwargs = model.planet_inputs(res['params'], cfg)
-    assert kwargs['Rp_override'] == 1.9*c.Re and args[9] is False
+    assert kwargs['Rp_override'] == 1.9*c.Re and args[9] is False # args[9]: rad_evol
     assert res['obs']['Rp'] == pytest.approx(1.9, rel = 1e-14) and np.all(res['sol']['Rp'] == 1.9*c.Re)
     assert model.planet_inputs(prm.theta_to_params(CENTRE, example()), example())[1]['Rp_override'] is False
 
 
 def test_atmodeller_calls():
+    '''
+    Checks the number of Atmodeller calls of a run whose atmosphere lasted n_end of n_steps steps: one every
+    n_atmodeller steps while it lasts, plus the final call when it lasted to the end; none without Atmodeller or
+    without an atmosphere.
+    '''
     assert model.atmodeller_calls(100000, 100000, 100) == 1001
     assert model.atmodeller_calls(2000, 2000, 100) == 21
     assert model.atmodeller_calls(150, 1000, 100) == 2
@@ -281,8 +344,13 @@ def test_atmodeller_calls():
 ###_____Worker pool (toy backend)_____###
 
 def test_pool_toy(worker_globals):
+    '''
+    Checks the WorkerPool with 2 spawned workers on the toy: map gives the results of serial log_prob calls, bit
+    for bit except the timing; the workers ignore SIGINT, since Ctrl-C is the parent's to handle; and
+    imap_unordered returns every task.
+    '''
     cfg = example()
-    thetas = list(prm.sample_prior(cfg, 8, 0)) + [np.array([-2.8, 7.0, 5e9])]
+    thetas = list(prm.sample_prior(cfg, 8, 0)) + [np.array([-2.8, 7.0, 5e9])] # and one outside the prior
     model.init_worker(cfg)
     serial = [model.log_prob(theta) for theta in thetas]
     with WorkerPool(cfg, 2) as pool:
@@ -292,7 +360,7 @@ def test_pool_toy(worker_globals):
         assert pool.map(signal.getsignal, [signal.SIGINT]*2) == [signal.SIG_IGN]*2 # Ctrl-C is the parent's
         tasks = [{'theta': theta, 'id': i} for i, theta in enumerate(thetas)]
         unordered = sorted(pool.imap_unordered(model.eval_task, tasks), key = lambda r: r['id'])
-    runtime = model.BLOB_FIELDS.index('runtime') + 1
+    runtime = model.BLOB_FIELDS.index('runtime') + 1 # its position in a log_prob tuple
     for a, b in zip(serial, parallel):
         assert len(b) == 1 + len(model.BLOB_FIELDS)
         np.testing.assert_array_equal(np.delete(a, runtime), np.delete(b, runtime)) # bitwise except timing
@@ -301,6 +369,11 @@ def test_pool_toy(worker_globals):
 
 
 def test_choose_workers(capsys):
+    '''
+    Checks the worker count under the memory budget: about 0.75 + 1.1e-6 n_steps GB per worker (0.86 GB at 1e5,
+    0.15 GB on the toy), cut to fit min(max_memory_gb, 70% of the available memory), or max_memory_gb alone with
+    check_available = false; never below one worker. A config.json saved before check_available existed is checked.
+    '''
     cfg = example(backend = 'isocalc')
     assert est_worker_gb(1e5) == pytest.approx(0.86) and est_worker_gb(1e6, 'toy') == 0.15
     cfg['parallel']['max_memory_gb'] = 2.0
@@ -319,6 +392,10 @@ def test_choose_workers(capsys):
 
 
 def test_parent_imports_stay_light():
+    '''
+    Checks that importing the parent-side modules of isofate.mcmc loads neither jax, atmodeller, numba nor the
+    coupled model: the parent process only coordinates, and the model, with its memory, lives in the workers.
+    '''
     code = ('import sys, isofate.mcmc, isofate.mcmc.config, isofate.mcmc.params, isofate.mcmc.likelihood, '
             'isofate.mcmc.model, isofate.mcmc.pool, isofate.mcmc.toy, isofate.mcmc.env; '
             "bad = [m for m in ('jax', 'atmodeller', 'numba', 'isofate.isofate_coupler') if m in sys.modules]; "
@@ -330,6 +407,10 @@ def test_parent_imports_stay_light():
 
 @pytest.fixture(scope = 'module')
 def real():
+    '''
+    Three real isocalc runs at n_steps = 2000, shared by the slow tests: the centre, the centre with
+    save_molecules, and a stripped planet
+    '''
     # n_atmodeller = 20, not 100: the kernel rows at the last step carry the atmosphere/mantle split of the last
     # regular Atmodeller call, n_atmodeller*2.5 Myr old at 2000 steps, while atmodeller_final re-equilibrates.
     # Measured C_O vs N_C/N_O: 2.0% apart at 2000/100, 0.37% at 2000/20, 0.034% at the fiducial 1e5/100.
@@ -342,6 +423,11 @@ def real():
 
 @pytest.mark.slow
 def test_real_extract(real):
+    '''
+    Checks extract on a real isocalc run at the centre: a radius of 1.6-1.9 R_earth, VMRs summing to 1, C/O within
+    1% of N_C/N_O, one Atmodeller call every 20 steps plus the final one, a hot surface (T_surf > 1000 K), mmw of
+    2-5 g/mol, Mdot = Mdot_H + Mdot_He, and He from conservation agreeing with the kernel row.
+    '''
     res = real['centre']
     obs, sol = res['obs'], res['sol']
     assert res['status'] == model.OK and math.isfinite(res['lp'])
@@ -357,6 +443,11 @@ def test_real_extract(real):
 
 @pytest.mark.slow
 def test_real_exhausted(real):
+    '''
+    Checks a real stripped run: fatm = Mdot = 0, a finite t_lost, Rp = the bare core, the composition NaN, and a
+    finite lp (an Rp detection of a bare core is a valid point). The atmosphere is lost within the first 20 steps
+    (50 Myr), so there was one Atmodeller call, and atmodeller_final holds its 21 NaN entries.
+    '''
     res = real['stripped']
     obs = res['obs']
     assert obs['exhausted'] == 1 and obs['fatm'] == 0 and obs['Mdot'] == 0 and math.isfinite(obs['t_lost'])
@@ -368,7 +459,11 @@ def test_real_exhausted(real):
 
 @pytest.mark.slow
 def test_real_outflow_observables(real):
-    # the centre (log_f_atm -2.8, 5 Gyr) is H-rich and subcritical: He does not escape, the outflow is pure H
+    '''
+    Checks the outflow observables of real runs. The centre (log_f_atm -2.8, 5 Gyr) is H-rich and subcritical: He
+    does not escape and the outflow is pure H. A stripped planet has no H/He wind at all, so both fractions are
+    undefined. Mdot_HHe follows from the fluxes and the radius of the last step.
+    '''
     obs = real['centre']['obs']
     assert obs['subcritical'] == 1 and obs['Mdot_He'] == 0
     assert obs['outflow_H_fraction'] == 1.0 and obs['outflow_He_fraction'] == 0.0
@@ -384,6 +479,9 @@ def test_real_outflow_observables(real):
 
 @pytest.mark.slow
 def test_real_log_prob(real, worker_globals):
+    '''
+    Checks that log_prob after init_worker returns the lp and blob of evaluate on the real model.
+    '''
     model.init_worker(real['cfg'])
     out = model.log_prob(np.array(CENTRE))
     assert len(out) == 1 + len(model.BLOB_FIELDS)
@@ -393,6 +491,11 @@ def test_real_log_prob(real, worker_globals):
 
 @pytest.mark.slow
 def test_toy_has_the_keys_of_isocalc(real):
+    '''
+    Checks that the toy returns the keys of isocalc, in the same order and with the same array shapes, for an
+    ordinary run, one with save_molecules and a stripped one, so that tests on the toy go through the code paths
+    of the real model.
+    '''
     cfg = real['cfg']
     for key, save_molecules in (('centre', False), ('molecules', True), ('stripped', False)):
         res = real[key]

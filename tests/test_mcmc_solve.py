@@ -1,9 +1,12 @@
 '''
-Tests of solve mode (SPEC amendment 2: isofate.mcmc.solve, the root finder of isofate.mcmc.search, and the solve
-paths of the sampler, resolution, scan, check and the figures) on the toy backend, in one process or with pools
-of at most 2 spawn workers; one real-isocalc solve (slow). The key test is test_thin_ridge_posterior: the
-solve-mode marginal of the solved parameter against a brute-force grid posterior, which only holds with the right
-Jacobian.
+Tests of solve mode: isofate.mcmc.solve, the root finder of isofate.mcmc.search, and the solve paths of the
+sampler, resolution, scan, check and the figures, on the toy backend, in one process or with pools of at most 2
+spawned workers; one real isocalc solve (slow).
+In solve mode the sampler moves in u, the model value of one observable (here mostly Rp), in place of the
+parameter P that pins it down (log_f_atm), and each evaluation solves T(P*, phi) = u for P*. The density then
+carries the Jacobian |dP*/du| = 1/|dT/dP|, so that the posterior over (P, phi) is unchanged (see "Solve mode" in
+the README). The key test is test_thin_ridge_posterior: the solve-mode marginal of the solved parameter against a
+brute-force grid posterior, which only holds with the right Jacobian.
 '''
 
 from isofate.mcmc import env
@@ -28,44 +31,59 @@ from isofate.mcmc import params as prm
 from isofate.mcmc.__main__ import main
 
 EXAMPLE = os.path.join(config.CONFIG_DIR, 'lhs1140b.toml')
+# the example on the toy at 2e4 steps, on 2 workers
 TOY = ['model.backend="toy"', 'parallel.cache=false', 'parallel.warmup=false', 'model.n_steps=20000',
        'parallel.workers=2']
 # the example reduced to Rp and Mp, solved on Rp (3 free parameters: log_f_atm, Mp, age)
 RP = ['params.eps.vary=false', 'observables.outflow_H_fraction.use=false', 'observables.Mdot_HHe.use=false',
       'solve.observable="Rp"', 'sampler.reset_stuck_at=0']
+# the arrays of chain.npz that a bit-identical resume must reproduce: the chain and the sampler's RNG state
 STATE_KEYS = ('iteration', 'chain', 'log_prob', 'accepted', 'rs_name', 'rs_key', 'rs_pos', 'rs_has_gauss',
               'rs_cached')
 
 
 def toy_cfg(tmp_path, *overrides):
+    '''
+    The toy config of TOY and RP, solved on Rp along log_f_atm, writing to tmp_path, with more --set overrides
+    '''
     return config.load_config(EXAMPLE, TOY + RP + [f'output_root="{tmp_path}"', *overrides])
 
 
 def quiet(*args, **kwargs):
+    '''
+    A log function that prints nothing
+    '''
     pass
 
 
 def chain_npz(run_dir, name = 'chain.npz'):
+    '''
+    The arrays of a checkpoint file of run_dir, as a dict
+    '''
     with np.load(os.path.join(run_dir, name)) as d:
         return {key: d[key] for key in d.files}
 
 
 def same(a, b):
     '''
-    Equal arrays, NaN equal to NaN for floats (a table's lslope is NaN for a solve without a usable derivative).
+    True when a and b have the same dtype and values, NaN equal to NaN for floats (a table's lslope is NaN for a
+    solve without a usable derivative)
     '''
     a, b = np.asarray(a), np.asarray(b)
     return a.dtype == b.dtype and np.array_equal(a, b, equal_nan = a.dtype.kind == 'f')
 
 
 def same_table(one, two):
+    '''
+    True when two warm-start tables have the same keys and equal arrays (same)
+    '''
     return one.keys() == two.keys() and all(same(one[k], two[k]) for k in one)
 
 
 def assert_same_run(a, b):
     '''
-    Bit-identical runs a and b (run directories): the chain, its RNG state, every blob field but the runtime, and
-    the warm-start table at the end.
+    Asserts that runs a and b (run directories) are bit-identical: the chain, its RNG state, every blob field but
+    the runtime, the table version, and the warm-start table at the end
     '''
     x, y = chain_npz(a), chain_npz(b)
     for key in STATE_KEYS:
@@ -82,27 +100,43 @@ def assert_same_run(a, b):
 
 class InProcessPool:
     '''
-    In-process stand-in for the WorkerPool of a sampler session (in_process): model.init_worker here, and an empty
-    table cache, as the fresh workers of each session have.
+    An in-process stand-in for the WorkerPool of a sampler session (fixture in_process), with its signature and the
+    attributes the sampler reads (n, warmup_s, _pool). It runs model.init_worker here and empties the warm-start
+    table cache, as the fresh workers of each session start without one.
     '''
 
     def __init__(self, cfg, workers = None, n_steps_max = None, run_dir = None, verbose = True):
+        '''
+        Sets up the worker globals in this process; the arguments are those of WorkerPool.
+        '''
         model.init_worker(cfg, run_dir)
         solve._TABLES.clear()
         self.n, self.warmup_s, self._pool = 1, 0.0, [] # _pool: no worker processes (worker_rss_gb)
 
     def map(self, f, iterable):
+        '''
+        [f(x) for x in iterable], in this process
+        '''
         return [f(x) for x in iterable]
 
     def __enter__(self):
+        '''
+        The pool itself, as WorkerPool's context manager
+        '''
         return self
 
     def __exit__(self, *exc):
+        '''
+        Nothing to stop; never suppresses an exception
+        '''
         return False
 
 
 @pytest.fixture
 def in_process(monkeypatch):
+    '''
+    Runs the sampler of one test with InProcessPool in place of WorkerPool, and restores the worker globals after it
+    '''
     saved = model._CFG, model._RUN_DIR, model._N_UNEXPECTED
     monkeypatch.setattr(sampler, 'WorkerPool', InProcessPool)
     yield
@@ -111,7 +145,7 @@ def in_process(monkeypatch):
 
 def toy_bias(cfg):
     '''
-    The toy's resolution bias of Rp (toy.isocalc).
+    The toy's resolution bias of Rp, the factor 1 + 0.05 n_atmodeller/n_steps + 1e3/n_steps of toy.isocalc [ndim]
     '''
     m = cfg['model']
     return 1 + 0.05*m['n_atmodeller']/m['n_steps'] + 1e3/m['n_steps']
@@ -120,6 +154,12 @@ def toy_bias(cfg):
 ###_____One solve_____###
 
 def test_solve_reproduces_u(tmp_path):
+    '''
+    Checks single solves at 30 init draws of (u_Rp, Mp, age): each finds log_f_atm* inside its prior, with the model
+    Rp within solve.tol (0.01 sigma) of u, or has no root there (status 1). lp = log_prior + log_jac + log_like, a
+    solve takes 3-42 model runs (max_evals = 40, plus the derivative), and the blobs belong to the physical point
+    (P*, phi). Without solve mode the solve fields of a blob say so.
+    '''
     cfg = toy_cfg(tmp_path)
     assert cfg['sampled'] == ['u_Rp', 'Mp', 'age'] and cfg['solve']['bounds'] == pytest.approx([1.58, 1.88])
     thetas = prm.sample_solve(cfg, 30, np.random.default_rng(1))
@@ -147,8 +187,12 @@ def test_solve_reproduces_u(tmp_path):
 
 
 def test_jacobian_matches_the_analytic_derivative(tmp_path):
-    # the toy's Rp = R_core b (1 + 4 sqrt(fatm)) with fatm = 10**log_f_atm x (a decay): dRp/dlog_f_atm =
-    # ln(10)/2 (Rp - R_core b), so ln|dP*/du| = -ln(ln(10)/2 (Rp* - R_core b)), R_core = Mp**0.25 R_earth
+    '''
+    Checks log_jac against the toy's exact derivative. The toy's Rp = R_core b (1 + 4 sqrt(fatm)) with
+    fatm = 10**log_f_atm x (a decay), so dRp/dlog_f_atm = ln(10)/2 (Rp - R_core b) and
+    ln|dP*/du| = -ln(ln(10)/2 (Rp* - R_core b)), with R_core = Mp**0.25 R_earth and b the resolution bias. log_jac
+    must match it to 1e-3 (the accuracy target is 0.01), and so must the change of P* with u itself.
+    '''
     cfg = toy_cfg(tmp_path)
     b = toy_bias(cfg)
     for u, Mp, age in ((1.73, 5.6, 5e9), (1.65, 5.0, 8e9), (1.80, 6.2, 4e9)):
@@ -163,6 +207,11 @@ def test_jacobian_matches_the_analytic_derivative(tmp_path):
 
 
 def test_no_root_is_status_1(tmp_path):
+    '''
+    Checks a (u, phi) without a root: no log_f_atm gives Rp = 1.6 at Mp = 6.7, so the evaluation is outside the
+    prior (status 1, lp -inf) after the two bound evaluations, and a u outside its support costs no model run. The
+    same holds through a pool, and physical evaluations through the pool do not solve.
+    '''
     cfg = toy_cfg(tmp_path)
     # at Mp = 6.7 the smallest radius with an atmosphere is R_core b = 1.69 R_earth and the bare core 1.609: no
     # log_f_atm gives Rp = 1.6
@@ -182,17 +231,34 @@ def test_no_root_is_status_1(tmp_path):
 
 def synthetic(f, lo = -5.0, hi = 0.0, target = 0.0, tol = 0.01, sigma = 1.0, **kwargs):
     '''
-    search.find_root on g = f(x) - target in [lo, hi] (no model): returns (root, history).
+    Runs search.find_root on g = f(x) - target in [lo, hi], without a model
+
+    Inputs:
+        - f: a function of x, NaN where undefined
+        - lo, hi: the bounds of x
+        - target: the value f must reach
+        - tol: tolerance [fraction of sigma]
+        - sigma: the sigma of the observable
+        - kwargs: max_evals (default 60), and the warm start: guess, step, orient, slope
+
+    Output: (root, history) of find_root [tuple]
     '''
     st = {'lo': lo, 'hi': hi, 'log': False, 'index': 0, 'ocfg': {'sigma': sigma, 'sigma_model': 0.0}}
 
-    def run(theta):
+    def run(theta): # (g, whether the model ran, what to record)
         value = f(theta[0])
         return value - target, True, value
     return search.find_root(run, [math.nan], st, target, tol, kwargs.pop('max_evals', 60), **kwargs)
 
 
 def test_root_finder():
+    '''
+    Checks the root finder on synthetic functions: Illinois steps on a smooth function, the NaN-end rule, a jump
+    across the target, a NaN inside a bracket of defined ends, no sign change, undefined at both ends, and the
+    evaluation limit. Then warm starts from a guess: the right and the wrong orientation, a Newton first step, a
+    guess between an undefined region and the root (as at the LHS 1140 b stripping edge), and a guess where g is
+    undefined.
+    '''
     # smooth and convex: Illinois needs far fewer steps than bisection (12 halvings for 5/2**12 ~ 1e-3)
     root, hist = synthetic(lambda x: math.exp(2*x) - 0.05)
     assert root.outcome == search.CONVERGED and abs(math.exp(2*root.x) - 0.05) <= 0.01 and root.evals <= 12
@@ -243,9 +309,13 @@ def test_root_finder():
 
 
 def test_wind_fractions_need_an_h_he_wind():
-    # a metal-dominated wind (H + He < half of the escaping mass) counts as no H/He wind for the root finder
+    '''
+    Checks that the outflow fractions count as undefined for the root finder where H and He carry less than half
+    of the escaping mass: such a metal-dominated wind (at the stripping edge) is not the H/He wind they describe.
+    Other observables are used as they are.
+    '''
     o = {'space': 'log10', 'floor': 1e-15, 'ceiling': 1e15, 'sigma': 0.25, 'sigma_model': 0.0}
-    metal = {'outflow_H_fraction': 1e-3, 'Mdot_HHe': 1.0, 'Mdot': 10.0}
+    metal = {'outflow_H_fraction': 1e-3, 'Mdot_HHe': 1.0, 'Mdot': 10.0} # H + He carry 10% of the escaping mass
     assert np.isnan(search.g_of(metal, 'outflow_H_fraction', o, -3.0)[0])
     helium = dict(metal, Mdot_HHe = 9.0)
     assert search.g_of(helium, 'outflow_H_fraction', o, -3.0)[0] == pytest.approx(0.0, abs = 1e-12)
@@ -257,9 +327,15 @@ def test_wind_fractions_need_an_h_he_wind():
 
 def wind_model(p, metal = True):
     '''
-    A stand-in for log_f_atm -> final outflow (as at the LHS 1140 b stripping edge with dynamic_phi): no wind below
-    -3.3; a metal-dominated wind up to -3.0 whose H fraction swings across the data (x = 1, then 1e-7); then the
-    H/He island, log10 x = -7 + 20 (p + 3), up to x = 1. metal = False gives the metal band an H/He wind instead.
+    A stand-in for log_f_atm -> the final outflow, as at the LHS 1140 b stripping edge with dynamic_phi: no wind
+    below -3.3; a metal-dominated wind up to -3.0 whose H fraction swings across the data (x = 1, then 1e-7); then
+    the H/He island, log10 x = -7 + 20 (p + 3), up to x = 1
+
+    Inputs:
+        - p: log_f_atm [dex]
+        - metal: False gives the band from -3.3 to -3.0 an H/He wind instead [Bool]
+
+    Output: outflow_H_fraction, Mdot_HHe [kg/s] and Mdot [kg/s] [dict]
     '''
     if p < -3.3:
         return {'outflow_H_fraction': math.nan, 'Mdot_HHe': 0.0, 'Mdot': 0.0}
@@ -269,12 +345,17 @@ def wind_model(p, metal = True):
 
 
 def test_metal_wind_edge_is_the_stripped_side():
-    # the root finder skips the metal-wind band at the stripping edge and converges on the H/He island root
+    '''
+    Checks that the root finder treats the metal-wind band at the stripping edge as part of the stripped side and
+    converges on the root of the H/He island, from a cold start or warm-started on either side of the band. Read
+    as an H/He wind, the band's swing ends the same search at its edge without a root, so the test has power.
+    '''
     o = {'space': 'log10', 'floor': 1e-15, 'ceiling': 1e15, 'sigma': (0.261, 0.240), 'sigma_model': 0.0}
-    target = math.log10(0.00115)
-    island = -3 + (7 + target)/20
+    target = math.log10(0.00115) # the LHS 1140 b datum
+    island = -3 + (7 + target)/20 # where the island's log10 x reaches it
     st = {'lo': -5.0, 'hi': -1.3, 'log': False, 'index': 0, 'ocfg': o}
 
+    # the outcome of a search on wind_model, warm-started with the keywords warm
     def search_with(metal, **warm):
         def run(theta):
             obs = wind_model(theta[0], metal)
@@ -293,6 +374,12 @@ def test_metal_wind_edge_is_the_stripped_side():
 ###_____Initialization, the warm-start table, resume_____###
 
 def test_init_solve_and_table(tmp_path):
+    '''
+    Checks init = "solve": 16 walkers distinct in every coordinate (u included), with a finite lp and u inside its
+    support; solve_init.npz; and the warm-start table fitted to the solved draws. Its guess and slope (from the
+    neighbours' log_jac) make warm solves cheaper than cold ones, landing within solve.tol all the same. Without
+    warm starts the table is still written, and the log says that it is unused.
+    '''
     cfg = toy_cfg(tmp_path)
     pool = model.LocalPool(cfg)
     coords, lp, blobs = sampler.init_solve(cfg, pool, 16, np.random.default_rng(1), str(tmp_path), quiet)
@@ -300,7 +387,7 @@ def test_init_solve_and_table(tmp_path):
     assert all(len(np.unique(coords[:, i])) == 16 for i in range(3)) # distinct in every coordinate, u included
     assert np.all((coords[:, 0] >= 1.58) & (coords[:, 0] <= 1.88)) and (blobs['status'] == 0).all()
     with np.load(tmp_path/'solve_init.npz') as d:
-        assert d['theta'].shape[0] >= 48 and list(d['free']) == ['u_Rp', 'Mp', 'age']
+        assert d['theta'].shape[0] >= 48 and list(d['free']) == ['u_Rp', 'Mp', 'age'] # batches of 3 x nwalkers
     table = solve.load_table(str(tmp_path/solve.TABLE))
     assert table['x'].shape[1] == 3 and table['k'] == 8 and table['param'] == 'log_f_atm' and table['step'] > 0
     guess, step, orient, slope = solve.predict(table, coords[0])
@@ -320,6 +407,11 @@ def test_init_solve_and_table(tmp_path):
 
 
 def test_solve_table_determinism(tmp_path):
+    '''
+    Checks that the warm-start table is deterministic: two fits to the same solves are equal, the saved table
+    predicts what the fitted one does, and a warm solve from it gives the same blob twice, also in another process
+    (as a worker of a resumed run would).
+    '''
     cfg = toy_cfg(tmp_path)
     thetas = prm.sample_solve(cfg, 40, np.random.default_rng(3))
     solved = [solve.evaluate(theta, cfg) for theta in thetas]
@@ -351,6 +443,11 @@ def test_solve_table_determinism(tmp_path):
 
 
 def test_resume_is_bit_identical_in_solve_mode(tmp_path):
+    '''
+    Checks that a solve-mode run stopped at step 20 and resumed is bit-identical to the run in one go, with table
+    refits before (steps 5 and 15) and after (25) the stop. The sampling solves are warm starts, cheaper than the
+    cold ones of the initialization, and each checkpoint holds the table active at its step.
+    '''
     # table refits before (5, 15) and after (25) the interruption at step 20
     cfg = toy_cfg(tmp_path, 'sampler.nwalkers=16', 'sampler.max_steps=30', 'sampler.tracks=0',
                   'sampler.check_every=10', 'sampler.print_every=10', 'solve.refit_steps=[5, 15, 25]')
@@ -379,12 +476,17 @@ def test_resume_is_bit_identical_in_solve_mode(tmp_path):
 
 
 def test_refit_table_and_forward_derivative(tmp_path):
+    '''
+    Checks the refit of the warm-start table to the chain: deterministic, with more points and a smaller
+    leave-one-out error than the initialization's table. Also that the forward and central Jacobians agree on the
+    smooth toy, central costing one model run more (or none more where forward fell back to P* - h).
+    '''
     cfg = toy_cfg(tmp_path, 'sampler.nwalkers=16', 'sampler.max_steps=40', 'sampler.tracks=0',
                   'sampler.check_every=20', 'sampler.print_every=20', 'solve.refit_steps=[10, 20]')
     run = sampler.run_mcmc(cfg, workers = 2, run_dir = str(tmp_path/'run'), make_plots = False)
     c = chain_npz(run)
-    init = solve.build_table(cfg, run)
-    refit = solve.build_table(cfg, run, c['chain'][:20], c['blobs'][:20])
+    init = solve.build_table(cfg, run) # from solve_init.npz alone
+    refit = solve.build_table(cfg, run, c['chain'][:20], c['blobs'][:20]) # plus the chain's first 20 steps
     final = solve.load_table(os.path.join(run, solve.TABLE))
     assert same_table(refit, final) # deterministic
     assert len(refit['p']) > len(init['p']) and np.median(np.abs(refit['loo'])) < np.median(np.abs(init['loo']))
@@ -401,17 +503,22 @@ def test_refit_table_and_forward_derivative(tmp_path):
     assert toy_cfg(tmp_path, 'solve.refit_steps=[]')['solve']['refit_steps'] == []
 
 
+# 16 walkers, 30 steps, table refits after steps 5, 15 and 25
 REFITS = ['sampler.nwalkers=16', 'sampler.max_steps=30', 'sampler.tracks=0', 'sampler.check_every=10',
           'sampler.print_every=10', 'solve.refit_steps=[5, 15, 25]']
 
 
 def test_an_interrupted_refit_is_redone(tmp_path, in_process, monkeypatch):
-    # Ctrl-C (or SIGTERM, SIGHUP) while the table is refitted after step 15 checkpoints step 15 with the table of
-    # step 5: the resume redoes that refit before step 16, as the uninterrupted run did it
+    '''
+    Checks that a refit cut short is redone. Ctrl-C (or SIGTERM, SIGHUP) while the table is refitted after step 15
+    checkpoints step 15 with the table of step 5; the resume redoes that refit before step 16, as the uninterrupted
+    run did it, and the two runs are bit-identical.
+    '''
     cfg = toy_cfg(tmp_path, *REFITS)
     straight = sampler.run_mcmc(cfg, run_dir = str(tmp_path/'straight'), make_plots = False)
     build = solve.build_table
 
+    # Ctrl-C in the refit after step 15
     def interrupted(cfg, run_dir, chain = None, blobs = None):
         if chain is not None and len(chain) == 15:
             raise KeyboardInterrupt
@@ -429,10 +536,13 @@ def test_an_interrupted_refit_is_redone(tmp_path, in_process, monkeypatch):
 
 
 def test_a_failed_refit_keeps_the_table(tmp_path, in_process, monkeypatch):
-    # an error in a refit is a warning: the run goes on with the table it has, and a resume does not redo the refit
-    # from its longer chain
+    '''
+    Checks that an error in a refit is a warning: the run goes on with the table it has, and a resume does not redo
+    the refit from its longer chain, so a stopped and resumed run stays bit-identical to the run in one go.
+    '''
     build = solve.build_table
 
+    # the refit after step 15 fails, in every run
     def failing(cfg, run_dir, chain = None, blobs = None):
         if chain is not None and len(chain) == 15:
             raise np.linalg.LinAlgError('singular matrix')
@@ -452,10 +562,13 @@ def test_a_failed_refit_keeps_the_table(tmp_path, in_process, monkeypatch):
 
 @pytest.mark.parametrize('init', ['prescan', 'solve'])
 def test_resume_after_a_hard_kill(tmp_path, in_process, init):
-    # A session killed (SIGKILL, out of memory, power loss) after the refit at step 5 but before its next checkpoint
-    # leaves the table of step 5 on disk next to a checkpoint of step 4. Before step 5 the workers had the
-    # initialization's table (init = "solve", written back from the checkpoint), or none at all (init = "prescan":
-    # table_version -1, so the file is removed and they run cold): the resume repeats steps 5 on as they were
+    '''
+    Checks the resume after a hard kill (SIGKILL, out of memory, power loss) between the refit at step 5 and the
+    next checkpoint, which leaves the table of step 5 on disk next to a checkpoint of step 4. Before step 5 the
+    workers had the initialization's table (init = "solve", written back from the checkpoint), or none at all
+    (init = "prescan": table_version -1, so the file is removed and they run cold). Either way the resume repeats
+    steps 5 on as they were.
+    '''
     cfg = toy_cfg(tmp_path, f'sampler.init="{init}"', *REFITS)
     straight = sampler.run_mcmc(cfg, run_dir = str(tmp_path/'straight'), make_plots = False)
     part = sampler.run_mcmc(cfg, run_dir = str(tmp_path/'part'), max_steps = 4, make_plots = False)
@@ -470,8 +583,12 @@ def test_resume_after_a_hard_kill(tmp_path, in_process, init):
 
 
 def test_configs_from_before_the_options(tmp_path):
-    # configs saved before solve.derivative and solve.refit_steps existed (2026-10-29) were sampled with the central
-    # difference; a resume keeps the scheme of the run's last session (sampler.run_derivative)
+    '''
+    Checks configs saved before solve.derivative and solve.refit_steps existed: they were sampled with the central
+    difference, and they get the default refits. A resume keeps the scheme of the run's last session
+    (sampler.run_derivative): the config's, else the checkpoint's, else forward when the checkpoint holds a
+    warm-start table (only the forward default wrote one), else central.
+    '''
     cfg = toy_cfg(tmp_path)
     old = copy.deepcopy(cfg)
     del old['solve']['derivative'], old['solve']['refit_steps']
@@ -484,13 +601,16 @@ def test_configs_from_before_the_options(tmp_path):
 
 
 def test_an_old_central_run_resumes_central(tmp_path, in_process):
-    # a run of 2026-10-28: sampled with the central difference, its config.json without solve.derivative and
-    # solve.refit_steps, its checkpoint without the table. Resumed, it goes on with the central difference (and the
-    # default refits), as the same run in one session with the central difference
+    '''
+    Checks an old run sampled with the central difference, whose config.json lacks solve.derivative and
+    solve.refit_steps and whose checkpoint has no table. Resumed, it goes on with the central difference (and the
+    default refits), as the same run in one session with the central difference does.
+    '''
     cfg = toy_cfg(tmp_path, 'solve.derivative="central"', 'sampler.nwalkers=16', 'sampler.max_steps=30',
                   'sampler.tracks=0', 'sampler.check_every=10', 'sampler.print_every=10')
     straight = sampler.run_mcmc(cfg, run_dir = str(tmp_path/'straight'), make_plots = False)
     part = sampler.run_mcmc(cfg, run_dir = str(tmp_path/'part'), max_steps = 20, make_plots = False)
+    # make the stopped run old: no solve.derivative or refit_steps in config.json, no table in the checkpoint
     path = os.path.join(part, 'config.json')
     old = json.load(open(path))
     del old['solve']['derivative'], old['solve']['refit_steps']
@@ -513,11 +633,15 @@ def test_an_old_central_run_resumes_central(tmp_path, in_process):
 
 
 def test_forward_derivative_sides():
-    # the forward difference runs the model at P* + h; at the upper prior bound, or where T is undefined at P* + h,
-    # at P* - h (2 runs in the second case); the central difference runs both sides
+    '''
+    Checks the sides of the finite difference dT/dP. Forward runs the model at P* + h; at the upper prior bound, or
+    where T is undefined at P* + h, at P* - h (2 runs in the second case); undefined on both sides gives no
+    derivative. Central runs both sides, and so do settings without the derivative key.
+    '''
     u, h = 0.0, 1e-3
     st = {'h': h, 'index': 0, 'lo': -5.0, 'hi': 0.0, 'derivative': 'forward', 'observable': 'Rp', 'param': 'P'}
 
+    # solve._derivative of T at a root x: (deriv, model runs, why there is none, the points run)
     def derivative(T, x, settings = st):
         calls = []
 
@@ -551,7 +675,13 @@ def ridge_cfg(root, *overrides):
     '''
     The toy with log_f_atm and Mp free and a radius known to 2e-4 R_earth: a ridge 0.0003-0.0008 dex thin in
     log_f_atm that curves from -1.4 (Mp = 4) to -3.1 (Mp = 8); the slope dRp/dlog_f_atm, and with it the Jacobian,
-    changes by 2.7x along it.
+    changes by 2.7x along it. Uncoupled (n_atmodeller = 0), 2000 steps, an age of 2 Gyr, 16 walkers.
+
+    Inputs:
+        - root: output_root of the runs [Path]
+        - overrides: more --set overrides [str]
+
+    Output: the resolved config [dict]
     '''
     raw = {'name': 'ridge', 'output_root': str(root), 'star': {'mass': 0.18, 'luminosity': 0.0038},
            'planet': {'period': 24.74},
@@ -566,9 +696,17 @@ def ridge_cfg(root, *overrides):
 
 def grid_posterior(cfg, n_mp = 160, n_lf = 81, k = 7.0):
     '''
-    The posterior over (log_f_atm, Mp) on a grid, by brute force: Mp at n_mp cell midpoints, and at each a grid of
-    n_lf points across the ridge (+-k sigma of Rp around its root, found once), each weighted by exp(lp) x its
-    cell. No Jacobian is involved. Returns (log_f_atm, weight) of every grid point.
+    The posterior over (log_f_atm, Mp) of the ridge on a grid, by brute force, with no Jacobian involved: Mp at
+    n_mp cell midpoints of its prior, and at each a grid of n_lf points across the ridge (+-k sigma of Rp around
+    its root, found once), each weighted by exp(lp) x its cell
+
+    Inputs:
+        - cfg: the ridge config; the evaluations are physical, with or without solve mode [dict]
+        - n_mp: cells of Mp
+        - n_lf: points across the ridge at each Mp
+        - k: half-width of that grid [sigma of Rp]
+
+    Output: (log_f_atm, weight) of every grid point [tuple of arrays]
     '''
     st = dict(search.bracket(cfg, 'log_f_atm'), ocfg = cfg['observables']['Rp'])
     lfs, weights = [], []
@@ -578,17 +716,20 @@ def grid_posterior(cfg, n_mp = 160, n_lf = 81, k = 7.0):
             return res['obs']['Rp'] - RIDGE_RP, res['status'] in search.RAN, res
         root, _ = search.find_root(run, [math.nan, Mp], st, 0.0, 1e-3, 80)
         assert root.outcome == search.CONVERGED
-        h = 1e-6
+        h = 1e-6 # [dex] step of the slope at the root
         up, down = (model.evaluate([root.x + s*h, Mp], cfg)['obs']['Rp'] for s in (1, -1))
         slope = (up - down)/(2*h)
-        grid = root.x + np.linspace(-k, k, n_lf)*RIDGE_SIGMA/abs(slope)
+        grid = root.x + np.linspace(-k, k, n_lf)*RIDGE_SIGMA/abs(slope) # +-k sigma of Rp in log_f_atm
         lp = np.array([model.evaluate([x, Mp], cfg)['lp'] for x in grid])
         lfs.append(grid)
-        weights.append(np.exp(lp)*(grid[1] - grid[0]))
+        weights.append(np.exp(lp)*(grid[1] - grid[0])) # exp(lp) x the log_f_atm cell; the Mp cells are all equal
     return np.concatenate(lfs), np.concatenate(weights)
 
 
 def weighted_quantiles(x, w, q):
+    '''
+    The quantiles q of the values x with weights w (midpoint rule)
+    '''
     order = np.argsort(x)
     x, w = x[order], w[order]
     cdf = (np.cumsum(w) - 0.5*w)/np.sum(w) # midpoint rule
@@ -596,6 +737,13 @@ def weighted_quantiles(x, w, q):
 
 
 def test_thin_ridge_posterior(tmp_path):
+    '''
+    The key test of solve mode: on the thin curved ridge of ridge_cfg, the 16th, 50th and 84th percentiles of
+    log_f_atm from a solve-mode run must match the brute-force grid posterior within 4 Monte Carlo standard errors
+    (from the effective sample size, N thin/tau). Plain sampling started on the ridge stalls (acceptance below 5%),
+    while solve mode mixes (above 15%). The test has power: the same samples without the Jacobian are more than 5
+    standard errors off.
+    '''
     Q = np.array([0.16, 0.5, 0.84])
     # plain sampling in log_f_atm, started on the ridge (init = "bisect"): the moves stall
     plain = ridge_cfg(tmp_path, 'sampler.init="bisect"', 'sampler.bisect_observable="Rp"', 'sampler.max_steps=150')
@@ -619,6 +767,7 @@ def test_thin_ridge_posterior(tmp_path):
 
     def density(x0, h = 0.03): # of the grid posterior at x0 [1/dex]
         return np.sum(w[np.abs(lf - x0) < h])/np.sum(w)/(2*h)
+    # the standard error of a quantile q: sqrt(q (1 - q)/ess) over the density there
     se = np.sqrt(Q*(1 - Q)/ess)/np.array([density(x) for x in expected]) # [dex]
     found = np.percentile(P, 100*Q)
     assert np.all(np.abs(found - expected) < 4*se), (found, expected, se)
@@ -634,7 +783,17 @@ def test_thin_ridge_posterior(tmp_path):
 
 def toy_file(tmp_path, name = 'toy', solve_on = True, **sampler_options):
     '''
-    A toy-backend copy of the LHS 1140 b example in tmp_path with Rp and Mp only, solved on Rp (solve_on).
+    Writes a toy-backend copy of the LHS 1140 b example with Rp and Mp only to tmp_path/<name>.toml, solved on Rp
+    or not; 16 walkers, 20 steps, 4 tracks
+
+    Inputs:
+        - tmp_path: folder of the file, and its output_root [Path]
+        - name: the config's name [str]
+        - solve_on: True for solve mode on Rp along log_f_atm (init = "solve"), False for none (init = "prescan")
+          [Bool]
+        - sampler_options: more [sampler] options [dict]
+
+    Output: path of the config [str]
     '''
     with open(EXAMPLE, 'rb') as f:
         raw = tomllib.load(f)
@@ -654,8 +813,12 @@ def toy_file(tmp_path, name = 'toy', solve_on = True, **sampler_options):
 
 
 def test_bare_core_plateau(tmp_path, capsys):
-    # a stripped planet has Rp = the bare core for every log_f_atm below the stripping edge: a plateau that solve
-    # mode cannot represent. The config warns when it lies inside the u support, and check points it out.
+    '''
+    Checks the bare-core plateau: a stripped planet has Rp = the bare core for every log_f_atm below the stripping
+    edge, a plateau that solve mode cannot represent. The config warns when it lies inside the u support (TOI-406 b
+    solved on Rp; not without solve mode, nor LHS 1140 b, which is solved on the outflow), solve.plateau finds one
+    in a search, and check points it out.
+    '''
     toi = os.path.join(config.CONFIG_DIR, 'toi406b.toml')
     cfg = config.load_config(toi, ['solve.param="log_f_atm"', f'output_root="{tmp_path}"'])
     warn = [w for w in cfg['warnings'] if 'bare-core' in w]
@@ -683,6 +846,11 @@ def test_bare_core_plateau(tmp_path, capsys):
 
 
 def test_check_solve_cli(tmp_path, capsys):
+    '''
+    Checks check in solve mode: one solve printed run by run, at the datum or at a given u_Rp; a (u, phi) without
+    a root is reported (exit code 1); a misspelt sampled coordinate, or u_Rp without solve mode, is an error (exit
+    code 2).
+    '''
     path = toy_file(tmp_path)
     assert main(['check', path, '--theta', 'age=5e9']) == 0
     out = capsys.readouterr().out
@@ -697,6 +865,12 @@ def test_check_solve_cli(tmp_path, capsys):
 
 
 def test_run_outputs_in_solve_mode(tmp_path, capsys):
+    '''
+    Checks the outputs of a solve-mode run: solve_init.npz, the table, the summary in the physical parameters
+    (log_f_atm from the solves) with u_Rp listed as sampled, the MAP's log_f_atm from its blob,
+    lp = log_prior + log_jac + log_like, the log lines, tracks re-run at (P*, phi) without solving, and both
+    corner plots. compare lines a solve-mode run up with a plain run of the same planet, in the physical parameters.
+    '''
     path = toy_file(tmp_path)
     assert main(['run', path]) == 0
     (run_dir,) = [os.path.join(tmp_path, 'toy', d) for d in os.listdir(tmp_path/'toy')]
@@ -735,6 +909,12 @@ GRID = {'n_steps': [20000, 50000], 'n_atmodeller': [100, 10]} # the toy's Rp bia
 
 
 def test_resolution_solve_mode(tmp_path, capsys):
+    '''
+    Checks the resolution study in solve mode: each cell solves for log_f_atm again at fixed (u, phi), so d of Rp
+    is about 0 by construction; the outputs record solve mode, the shift of P*, the model runs of each solve, and
+    the coordinates (u perturbed for the noise floor). The same config with solve_mode = False uses physical test
+    points from the bisection on Rp.
+    '''
     from isofate.mcmc import resolution
     cfg = toy_cfg(tmp_path)
     assert config.resolution_source(cfg) == 'solve'
@@ -761,6 +941,12 @@ def test_resolution_solve_mode(tmp_path, capsys):
 
 
 def test_scan_reports_monotonicity(tmp_path, capsys):
+    '''
+    Checks the solve check of scan along the solved parameter: it reports whether Rp is monotonic inside the u
+    range (solve mode assumes one root per bracket) and where it is constant (a plateau, e.g. the bare core). Also
+    the line helpers on hand-made lines: a turn, two stretches inside the range, and a plateau inside the range or
+    outside it.
+    '''
     path = toy_file(tmp_path)
     assert main(['scan', path, '--x', 'log_f_atm=-4:-1.5:26', '--theta', 'age=5e9', '--workers', '1']) == 0
     out = capsys.readouterr().out
@@ -789,10 +975,14 @@ def test_scan_reports_monotonicity(tmp_path, capsys):
 
 @pytest.mark.slow
 def test_real_solve_lhs1140b(tmp_path):
-    # one solve on the outflow H fraction of LHS 1140 b at n_steps = 2000, in this process
+    '''
+    Checks one real solve on the outflow H fraction of LHS 1140 b at n_steps = 2000, in this process: log_f_atm*
+    near -3, log10 x within solve.tol of u, and a finite log_jac below -3, since dT/dlog_f_atm is of order 100 or
+    more on this steep ridge. At most 41 model runs, one of them the forward derivative, and an H/He wind.
+    '''
     cfg = config.load_config(EXAMPLE, ['model.n_steps=2000', 'model.n_atmodeller=20', 'parallel.cache=false',
                                        'parallel.warmup=false', f'output_root="{tmp_path}"'])
-    u = math.log10(0.00115)
+    u = math.log10(0.00115) # at the datum
     res = solve.evaluate([u, 5.6, 7.6e9, 0.15], cfg, history = True)
     assert res['status'] == model.OK and -3.2 < res['solve_value'] < -2.8
     assert abs(math.log10(res['obs']['outflow_H_fraction']) - u) <= 0.01*0.261

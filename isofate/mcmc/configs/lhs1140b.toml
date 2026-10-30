@@ -1,6 +1,7 @@
-# LHS 1140 b: the physics of isofate/isofate_MCMC.py, with its bugs fixed (see the README), fitted to the
-# outflow composition and mass-loss rate of Cherubim et al. 2026 (Science) and the radius and mass of
-# Cadieux et al. 2024. All options and their defaults are listed in template.toml.
+# LHS 1140 b: the physics of isofate/isofate_MCMC.py, with its bugs fixed (see "Caveats" in the README), fitted
+# to the outflow composition and mass-loss rate of Cherubim et al 2026 (Science) and the radius and mass of
+# Cadieux et al 2024. All options and their defaults are listed in template.toml.
+# The outflow datum pins log_f_atm to a thin ridge, so the fit runs in solve mode ([solve] below).
 # To run it, copy this file to your results folder's configs/ and set output_root = ".." there; without
 # output_root, results go to ./mcmc_results in the working directory.
 
@@ -12,14 +13,15 @@ description = "LHS 1140 b: outflow H fraction, H+He mass-loss rate, Rp and Mp; l
 mass = 0.18                   # [M_sun]
 radius = 0.22                 # [R_sun]
 teff = 3096.0                 # [K]
-luminosity = 0.0038           # [L_sun] (Cadieux et al. 2024: 0.0038 +- 0.0003); radius and teff alone give 0.00401
+luminosity = 0.0038           # [L_sun] (Cadieux et al 2024: 0.0038 +- 0.0003); radius and teff alone give 0.00401
 
 [planet]
 period = 24.74                # [days]
 
 [model]
-n_steps = 100000              # 1e5/100: the resolution for a final posterior; the solve-mode runs of 2026-10-28
-n_atmodeller = 100            # at 3e4/100 over-weighted eps > 0.6 by about 1.4x (README section 5)
+n_steps = 100000              # 1e5/100: the resolution for a final posterior; solve-mode runs at 3e4/100
+n_atmodeller = 100            # over-weighted eps > 0.6 by about 1.4x (see "Choosing n_steps and n_atmodeller"
+                              # in the README)
 step_fn = true                # XUV flux drops to F_final at t_sat
 flux_model = "power law"
 stellar_type = "M1"
@@ -40,16 +42,16 @@ log_F0_ratio = -3.0           # F0 = 1e-3 Fp
 vary = true
 prior = "uniform"
 bounds = [-5.0, -1.3]
-value = -3.0175               # check point: the He-dominated outflow island at 7.6 Gyr, eps 0.15 (scans of 2026-10-28)
+value = -3.0175               # check point: the He-dominated outflow island at 7.6 Gyr, eps 0.15 (from scans)
 
 [params.age]
 vary = true
 prior = "uniform"
-bounds = [3.128e9, 1e10]      # [yr]; from t_sat (decision 2026-10-28); the paper's minimum age is > 3.12 Gyr
+bounds = [3.128e9, 1e10]      # [yr]; from t_sat; the paper's minimum age is > 3.12 Gyr
 value = 7.6e9
 # The prior starts at t_sat, not at 3.1 Gyr: with step_fn = true, ages between 3.1 and 3.128 Gyr would still see
-# the saturated XUV today, which is unphysical for this quiet star (131-d rotation, L_X about 6.5e-6 L_bol). That
-# 28-Myr sliver made a spurious second mode (review of 2026-10-28: lp -11.2 at 3.11 Gyr and eps 0.2).
+# the saturated XUV today (3.5x F_final), which is unphysical for this quiet star (131-d rotation, L_X about
+# 6.5e-6 L_bol). That 28-Myr sliver made a spurious second mode (lp -11.2 at 3.11 Gyr and eps 0.2).
 
 [params.Mp]
 vary = true
@@ -64,15 +66,15 @@ bounds = [0.01, 1.0]
 value = 0.15
 # The present-day energy-limited Mdot is proportional to eps*F_final. On the island at eps = 0.15 the model gives
 # about 4e4 kg/s, 0.7 dex below the observed 2.03e5 kg/s. Along the ridge a larger eps raises Mdot but lowers Rp:
-# the ridge estimate of 2026-10-28 put eps at about 0.48 (Mdot_HHe 1.2e5 kg/s). eps also changes the whole escape
+# the ridge-marginalized estimate put eps at about 0.48 (Mdot_HHe 1.2e5 kg/s). eps also changes the whole escape
 # history (the radiation-recombination limited branch does not depend on eps).
 
 # [params.Rp_fixed]           # [R_earth]: a constant radius instead of the Lopez & Fortney one (sets rad_evol = false;
-# value = 1.73                # the Rp observable then acts as a prior on it). Off for LHS 1140 b (decision 2026-10-28).
+# value = 1.73                # the Rp observable then acts as a prior on it). Off for LHS 1140 b.
 
-# The outflow composition (Collin, 2026-10-28): 0.115 (+0.085/-0.052) % in Cherubim et al. 2026 (Science) is
-# p-winds' h_fraction, the H number fraction H/(H+He) of the escaping outflow, fitted with a uniform prior on
-# h_fraction in [1e-4, 1]. Only tracks whose outflow is very H-poor and He-dominated reproduce it.
+# The outflow composition: 0.115 (+0.085/-0.052) % in Cherubim et al 2026 (Science) is p-winds' h_fraction, the
+# H number fraction H/(H+He) of the escaping outflow, fitted with a uniform prior on h_fraction in [1e-4, 1].
+# Only tracks whose outflow is very H-poor and He-dominated reproduce it.
 [observables.outflow_H_fraction]
 use = true
 value = 0.00115
@@ -85,14 +87,14 @@ value = 2.03e5
 space = "log10"
 sigma = [0.137, 0.121]        # [dex] (lo, hi)
 
-[observables.Rp]              # [R_earth], Cadieux et al. 2024
+[observables.Rp]              # [R_earth], Cadieux et al 2024
 use = true
 value = 1.730
 sigma = 0.025
 sigma_model = 0.0             # the radius model is trusted less than the fractionation: e.g. 0.05-0.1 R_earth here
-                              # encodes a radius-model systematic (decision 2026-10-28: 0, observational error only)
+                              # encodes a radius-model systematic (0: observational error only)
 
-[observables.Mp]              # [M_earth], Cadieux et al. 2024; an input: with Mp free it acts as its prior
+[observables.Mp]              # [M_earth], Cadieux et al 2024; an input: with Mp free it acts as its prior
 use = true
 value = 5.60
 sigma = 0.19
@@ -122,7 +124,7 @@ use = false
 # value = 5e9
 # sigma = 1e9
 
-[observables.Teq]             # [K] (input); Cadieux et al. 2024 (albedo is fixed at 0 here, so this is a constant)
+[observables.Teq]             # [K] (input); Cadieux et al 2024 (albedo is fixed at 0 here, so this is a constant)
 use = false
 value = 226.0
 sigma = 4.0
@@ -250,11 +252,11 @@ use = false
 # value = 1800.0
 # sigma = 200.0
 
-# Solve mode (SPEC amendment 2): the sampler moves in u = log10 of the outflow H fraction instead of log_f_atm,
-# and each evaluation solves for the log_f_atm that gives that u (with the exact Jacobian in the density). The
-# outflow datum pins log_f_atm to a ridge about 0.003 dex thin that curves through age, Mp and eps (d log10 x /
-# d log_f_atm = 100-750 on it); emcee's moves did not mix on it in log_f_atm (acceptance 0.006-0.008, every walker
-# stuck, 400 steps; mcmc_results/lhs1140b*/mcmc_20261028-165655*). In u the ridge is a smooth, wide coordinate.
+# Solve mode: the sampler moves in u = log10 of the outflow H fraction instead of log_f_atm, and each evaluation
+# solves for the log_f_atm that gives that u (with the exact Jacobian in the density). The outflow datum pins
+# log_f_atm to a ridge about 0.003 dex thin that curves through age, Mp and eps (d log10 x / d log_f_atm = 100-750
+# on it); emcee's moves did not mix on it in log_f_atm (acceptance 0.006-0.008, every walker stuck in 400 steps).
+# In u the ridge is a smooth, wide coordinate: the solve-mode runs mixed (acceptance 0.19-0.20, tau about 19 steps).
 [solve]
 param = "log_f_atm"
 observable = "outflow_H_fraction"
@@ -265,14 +267,14 @@ warm_start = true
 
 [sampler]
 nwalkers = "auto"             # 24 with 6 workers (or 3) and 4 free parameters
-max_steps = 5000
+max_steps = 5000              # solve-mode runs at 3e4/100 reached N/tau = 68-83 after 1300-1600 steps
 seed = 12345
 init = "solve"                # solve mode: u from the outflow datum, the others from the prior, each solved
 # Without solve mode (--set 'solve.param=""' --set sampler.init=bisect), the bisection initializer works along
 # log_f_atm on the outflow H fraction, not on the default Rp: on this planet the radius match (Rp = 1.73 at
 # log_f_atm = -2.73 for 7.6 Gyr, eps 0.15) lies in the H-rich region that the outflow H fraction excludes (a pure
 # H wind there, term -75), so radius bisection would start the walkers off the island, which sits at log_f_atm =
-# -3.017 (check --bisect, 2026-10-28). check --bisect and resolution --no-solve --source bisect use these too.
+# -3.017 (check --bisect). check --bisect and resolution --no-solve --source bisect use these too.
 bisect_observable = "outflow_H_fraction"
 bisect_param = "log_f_atm"
 reset_stuck_at = 0            # no stuck-walker reset: with most walkers stuck it would copy the few others

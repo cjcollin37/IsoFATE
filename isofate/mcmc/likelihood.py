@@ -1,13 +1,28 @@
 '''
 Log-likelihood terms of the observables.
 
-Each active observable is compared in its space: linear, or log10 with the model clipped to [floor, ceiling]
-(so a zero escape rate becomes log10(floor) instead of -inf). The ceiling is 1/floor for dimensionless
-observables (an infinite ratio x/0 becomes log10(1/floor)) and inf for the escape rates [kg/s], whose values
-are far above 1/floor. Detections are Gaussian (split normal for asymmetric sigma); upper and lower limits use
-log Phi, the log of the normal CDF. Model values can be 0, inf or NaN. NaN means undefined, e.g. the
-composition of a stripped atmosphere: it rules out a detection or a lower limit and satisfies an upper limit
-(the species is absent).
+For each active observable the model value m is compared with the data value v in the observable's likelihood
+space, with the effective sigma s on the side of the data the model is on:
+    detection     -0.5 ((m - v)/s)^2
+    upper limit   log Phi((v - m)/s)
+    lower limit   log Phi((m - v)/s)
+Phi is the normal CDF. Its log comes from scipy.special.log_ndtr, which stays accurate far into the tails, where
+log(ndtr(z)) would already be log(0) = -inf below about z = -38. An asymmetric sigma [lo, hi] gives a split
+normal: the hi side when the model is above the data, the lo side below. sigma_model, the model's own error, is
+added in quadrature. The total log-likelihood is the sum of the terms.
+
+The space is linear, or log10 for observables that span many decades (escape rates, mixing ratios, the outflow
+H fraction). There the errors are in dex, and a Gaussian in log10 is a lognormal in the value. In log10 space
+the model is clipped to [floor, ceiling] first, so a zero escape rate becomes log10(floor) instead of -inf: far
+below any detection, but consistent with an upper limit above the floor. The ceiling is 1/floor for
+dimensionless observables (an infinite ratio x/0 becomes log10(1/floor)) and inf for the escape rates [kg/s],
+whose values are far above 1/floor.
+
+Model values can be 0, inf or NaN. NaN means undefined, e.g. the composition of a stripped atmosphere: it rules
+out a detection or a lower limit and satisfies an upper limit (the species is absent). A value that is infinite
+in the likelihood space (in linear space, or in log10 space past a floor of 0 or a ceiling of inf) satisfies only
+the limit on its side: -inf an upper limit, +inf a lower limit. No term or total is ever NaN, so emcee never sees
+one.
 '''
 
 import math
@@ -19,17 +34,26 @@ from isofate.orbit_params import EqTemp
 inf = math.inf
 
 
+###_____The likelihood space_____###
+
 def observed(ocfg):
     '''
-    The data value in the likelihood space.
+    Returns the data value of an observable in its likelihood space: log10(value) in log10 space, else value.
     '''
     return math.log10(ocfg['value']) if ocfg['space'] == 'log10' else ocfg['value']
 
 
 def to_space(x, ocfg):
     '''
-    A model value in the likelihood space: x, or log10 of x clipped to [floor, ceiling] (floor 0: no lower clip,
-    and x <= 0 gives -inf; ceiling inf: +inf stays +inf). NaN stays NaN.
+    Maps a model value into the likelihood space of an observable
+    Linear space: x itself. log10 space: log10 of x clipped to [floor, ceiling]. A floor of 0 means no lower clip
+    (x <= 0 gives -inf), a ceiling of inf no upper one (+inf stays +inf).
+
+    Inputs:
+        - x: model value in physical units; None counts as NaN
+        - ocfg: resolved observable config, cfg['observables'][name] [dict]
+
+    Output: the value in the likelihood space; NaN stays NaN
     '''
     x = math.nan if x is None else float(x)
     if ocfg['space'] == 'linear' or math.isnan(x):
@@ -39,31 +63,48 @@ def to_space(x, ocfg):
     if ceiling is None:
         ceiling = 1/floor if floor > 0 else inf
     x = min(max(x, floor), ceiling)
-    if x <= 0:
+    if x <= 0: # only possible with floor 0
         return -inf
     return math.log10(x)
 
 
 def sigma_eff(ocfg, above = None):
     '''
-    Effective sigma in the likelihood space: the hi side of an asymmetric sigma when the model is above the data
-    (above = True), the lo side otherwise, their mean for above = None; with sigma_model added in quadrature.
+    Returns the effective sigma of an observable in its likelihood space
+    An asymmetric sigma [lo, hi] is a split normal: the hi side applies when the model is above the data, the lo
+    side otherwise. sigma_model is added in quadrature.
+
+    Inputs:
+        - ocfg: resolved observable config [dict]
+        - above: True if the model is above the data, False if below, None for the mean of the two sides [Bool]
+
+    Output: effective sigma, in the unit of the space (dex in log10 space)
     '''
     s = ocfg['sigma']
-    if isinstance(s, (tuple, list)):
+    if isinstance(s, (tuple, list)): # [lo, hi]
         s = 0.5*(s[0] + s[1]) if above is None else (s[1] if above else s[0])
     return math.hypot(s, ocfg['sigma_model'])
 
 
+###_____Terms_____###
+
 def term(model_value, ocfg):
     '''
-    Log-likelihood term of one observable for a model value in physical units. Never NaN.
+    Calculates the log-likelihood term of one observable
+    Detection -0.5 z^2, upper limit log Phi(-z), lower limit log Phi(z), with z = (m - v)/s in the likelihood
+    space (see the module docstring).
+
+    Inputs:
+        - model_value: model value in physical units; None or NaN means undefined
+        - ocfg: resolved observable config [dict]
+
+    Output: log-likelihood term, 0 or below; -inf when ruled out, never NaN
     '''
     kind = ocfg['kind']
     m = to_space(model_value, ocfg)
-    if math.isnan(m):
+    if math.isnan(m): # undefined, e.g. the composition of a stripped atmosphere: the species is absent
         return 0.0 if kind == 'upper' else -inf
-    if math.isinf(m):
+    if math.isinf(m): # beyond any finite datum: only the limit on its side holds
         if m > 0:
             return 0.0 if kind == 'lower' else -inf
         return 0.0 if kind == 'upper' else -inf
@@ -78,6 +119,10 @@ def term(model_value, ocfg):
 
 
 def _sum_terms(values, observables):
+    '''
+    Sums the terms of the given observables over values (a missing value counts as NaN, i.e. undefined).
+    A NaN term counts as -inf, and a total that is not finite becomes -inf. Returns (total, {name: term}).
+    '''
     terms = {}
     total = 0.0
     for name, ocfg in observables.items():
@@ -91,22 +136,50 @@ def _sum_terms(values, observables):
 
 def log_like(obs_values, cfg):
     '''
-    Total log-likelihood of the active observables and the term of each: (total, {name: term}).
-    -inf if any term is -inf; never NaN.
+    Calculates the total log-likelihood of the active observables
+
+    Inputs:
+        - obs_values: model values by observable name, e.g. those of model.extract [dict]; a missing one counts
+          as undefined
+        - cfg: resolved config [dict]
+
+    Output: tuple
+        - total: sum of the terms; -inf if any term is -inf, never NaN
+        - terms: {name: term} of every active observable [dict]
     '''
     return _sum_terms(obs_values, cfg['observables'])
 
 
+###_____Input observables_____###
+
 def input_values(params, cfg):
     '''
-    The observables computed from the inputs alone: Mp [M_earth], age [yr], Teq [K].
+    Returns the observables computed from the inputs alone
+    Mp and age are isocalc inputs, and Teq = EqTemp(Fp, A = albedo) assumes full redistribution, so comparing them
+    with data acts as a prior on those parameters.
+
+    Inputs:
+        - params: parameter dict (params.theta_to_params) [dict]
+        - cfg: resolved config [dict]
+
+    Output: dict
+        - Mp: planet mass [M_earth]
+        - age: age [yr]
+        - Teq: equilibrium temperature [K]
     '''
     return {'Mp': params['Mp'], 'age': params['age'], 'Teq': float(EqTemp(cfg['planet']['Fp'], A = params['albedo']))}
 
 
 def input_log_like(params, cfg):
     '''
-    log_like over the input observables only (Mp, age, Teq), to reject a point before running the model.
+    Calculates log_like over the input observables only (Mp, age, Teq)
+    A point these rule out is rejected before the model runs, so it costs nothing.
+
+    Inputs:
+        - params: parameter dict (params.theta_to_params) [dict]
+        - cfg: resolved config [dict]
+
+    Output: (total, {name: term}) as log_like, over the active input observables [tuple]
     '''
-    inputs = {name: o for name, o in cfg['observables'].items() if o['input']}
+    inputs = {name: o for name, o in cfg['observables'].items() if o['input']} # the active input observables
     return _sum_terms(input_values(params, cfg), inputs)

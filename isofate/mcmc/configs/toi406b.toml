@@ -1,13 +1,14 @@
 # TOI-406 b: a generic example with only a radius and a mass, the data most sub-Neptunes and super-Earths have.
-# Star, orbit and data as in Harvard/Research/isofate_mcmc/isofate_MCMC_v2.py (Rp 1.55 +- 0.06 R_earth, Mp 4.57
-# +- 0.70 M_earth, age 3.5-10 Gyr); everything else at the tool's defaults (all options: template.toml). Unlike that
-# script it couples Atmodeller (n_atmodeller = 100) and uses the "ratios" composition.
+# Star, orbit, XUV history and data as in Harvard/Research/isofate_mcmc/isofate_MCMC_v2.py (Rp 1.55 +- 0.06
+# R_earth, Mp 4.57 +- 0.70 M_earth, age 3.5-10 Gyr); everything else at the tool's defaults (all options:
+# template.toml). Unlike that script it couples Atmodeller (n_atmodeller = 100) and uses the "ratios" composition.
 # To run it, copy this file to your results folder's configs/ and set output_root = ".." there.
 #
 # Sample it without solve mode. With sigma = 0.06 R_earth the radius ridge is wide enough for plain sampling, and
-# the bare core of a stripped planet (1.46 R_earth at 4.57 M_earth) also fits the radius: 82% of the posterior
-# was stripped (2026-10-29). Solve mode on Rp (--set 'solve.param="log_f_atm"') cannot sample that plateau and
-# returns only the planets that keep an atmosphere (the config then warns; README section 10).
+# the bare core of a stripped planet (1.46 R_earth at 4.57 M_earth) also fits the radius: 82% of the plain
+# posterior was stripped. Solve mode on Rp (--set 'solve.param="log_f_atm"') cannot sample that plateau and
+# returns only the planets that keep an atmosphere (the config then warns; see "Solve mode" in the README).
+# Plain sampling with 16 walkers on 2 workers mixed well: acceptance 0.20, tau 15-18 steps, 0.4 s/step.
 
 name = "toi406b"
 description = "TOI-406 b: Rp and Mp only (generic example); setup of isofate_MCMC_v2.py"
@@ -22,7 +23,7 @@ teff = 3075.0                 # [K]; L = 4 pi R^2 sigma Teff^4
 period = 19.288               # [days]
 
 [model]
-n_steps = 100000
+n_steps = 100000              # the default resolution, 1e5/100
 n_atmodeller = 100
 step_fn = false               # XUV: saturated until t_sat, then the power law of beta
 flux_model = "power law"
@@ -33,12 +34,12 @@ composition = "ratios"
 [params]
 t_sat = 2.435e9               # [yr]: t_jump = 5.9 - 15.4*M_star/M_sun Gyr
 log_F0_ratio = -3.0           # F0 = 1e-3 Fp
-eps = 0.15
+eps = 0.15                    # heating efficiency, fixed as in isofate_MCMC_v2.py
 
-[params.log_f_atm]
+[params.log_f_atm]            # uniform prior (the default)
 vary = true
 bounds = [-5.0, -1.3]
-value = -2.7
+value = -2.7                  # check point: Rp = 1.584 R_earth there at Mp 4.57 and 5 Gyr (term -0.16)
 
 [params.Mp]
 vary = true
@@ -65,7 +66,7 @@ param = ""                    # off; "log_f_atm" samples u = Rp instead of log_f
 observable = "Rp"
 
 [sampler]
-nwalkers = "auto"
+nwalkers = "auto"             # 24 with 6 workers and 3 free parameters, 16 with 2 workers
 max_steps = 5000
 
 [parallel]

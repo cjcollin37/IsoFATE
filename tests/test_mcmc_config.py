@@ -1,6 +1,8 @@
 '''
-Tests of isofate.mcmc.config (TOML loading, validation, overrides, writing) and isofate.mcmc.params (priors,
-prior draws, jitter, the nwalkers rule). Fast: no isocalc.
+Tests of isofate.mcmc.config and isofate.mcmc.params. config: loading a TOML config, the defaults, validation
+with its error messages and suggestions, --set overrides, the example configs, the solve-mode settings, and
+writing TOML and config.json back. params: the log prior, the Latin-hypercube prior draws, jitter and the ball
+start; and the nwalkers rule. Fast: no model runs.
 '''
 
 import copy
@@ -22,15 +24,16 @@ from isofate.mcmc.config import ConfigError
 @pytest.fixture(autouse = True)
 def outside_the_repo(tmp_path, monkeypatch):
     '''
-    Runs each test from tmp_path: the default output_root is ./mcmc_results, which inside the repository adds a
-    warning.
+    Runs each test from tmp_path. The default output_root is ./mcmc_results, which inside the repository adds a
+    warning to the config.
     '''
     monkeypatch.chdir(tmp_path)
 
 
 def minimal():
     '''
-    A small valid raw config: LHS 1140 b-like, log_f_atm free, Rp observed.
+    A small valid raw config: LHS 1140 b-like (0.18 M_sun, 0.0038 L_sun, a 24.74 day orbit, Mp = 5.6 M_earth),
+    log_f_atm free in [-5, -1.3], Rp observed (1.73 +- 0.025 R_earth)
     '''
     return {'name': 'test', 'star': {'mass': 0.18, 'luminosity': 0.0038}, 'planet': {'period': 24.74},
             'params': {'Mp': {'value': 5.6}, 'log_f_atm': {'vary': True, 'bounds': [-5.0, -1.3]}},
@@ -38,12 +41,21 @@ def minimal():
 
 
 def load(overrides = None, raw = None):
+    '''
+    The resolved config of raw (default minimal()) with overrides (a dict or a list of strings)
+    '''
     return config.load_config(raw or minimal(), overrides)
 
 
 ###_____config_____###
 
 def test_defaults():
+    '''
+    Checks the resolved defaults of the minimal config: each section equals its defaults table, solve mode is off,
+    a free parameter without a value starts at the middle of its bounds and fixed ones take the registry defaults.
+    Rp defaults to a linear-space detection without floor or model error, and the star and planet are derived
+    in SI (Fp = 587.6 W/m2 for LHS 1140 b).
+    '''
     cfg = load()
     assert cfg['model'] == config.MODEL_DEFAULTS
     assert cfg['sampler'] == config.SAMPLER_DEFAULTS
@@ -66,14 +78,18 @@ def test_defaults():
     assert cfg['output_root'] == os.path.join(os.getcwd(), 'mcmc_results')
     assert cfg['warnings'] == []
     # derived star and planet, in SI
-    P = 24.74/s2day
+    P = 24.74/s2day # [s]
     assert cfg['star']['L'] == 0.0038*Ls and cfg['star']['M'] == 0.18*Ms
     assert cfg['planet']['P'] == P and cfg['planet']['d'] == SemiMajor(0.18*Ms, P)
     assert cfg['planet']['Fp'] == Insolation(0.0038*Ls, SemiMajor(0.18*Ms, P))
-    assert cfg['planet']['Fp'] == pytest.approx(587.628, rel = 1e-5)
+    assert cfg['planet']['Fp'] == pytest.approx(587.628, rel = 1e-5) # [W/m2]
 
 
 def test_paths_and_name(tmp_path):
+    '''
+    Checks that a config without a name takes the name of its file, and that a relative output_root is relative
+    to the config's folder, not to the working directory.
+    '''
     raw = minimal()
     raw.pop('name')
     raw['output_root'] = '..'
@@ -88,29 +104,35 @@ def test_paths_and_name(tmp_path):
 
 
 def test_example_configs():
+    '''
+    Checks the shipped configs: the template, and the LHS 1140 b example in full (free parameters, solve mode on
+    the outflow H fraction, priors, data, sampler settings, walker counts), with the step-function XUV warning
+    when t_sat falls inside the age prior. When the working copies in mcmc_results/configs (next to the
+    repository) exist, it also checks that they hold the same physics.
+    '''
     template = config.load_config(config.TEMPLATE)
     assert template['warnings'] == []
     assert template['free'] == ['log_f_atm', 'age']
     cfg = config.load_config(os.path.join(config.CONFIG_DIR, 'lhs1140b.toml'))
-    # the age prior starts at t_sat (the user's decision of 2026-10-28), so the step-function warning is silent
+    # the age prior starts at t_sat, so the step-function warning is silent
     assert cfg['warnings'] == [] and cfg['notes'] == []
-    # with the old lower bound, 3.1 Gyr, t_sat = 3.128 Gyr lies inside the age prior: ages below it would see the
-    # saturated XUV today
+    # with a lower bound of 3.1 Gyr, t_sat = 3.128 Gyr lies inside the age prior: ages below it would still see the
+    # saturated XUV flux today (3.46 times F_final)
     sliver = config.load_config(os.path.join(config.CONFIG_DIR, 'lhs1140b.toml'), ['params.age.bounds=[3.1e9, 1e10]'])
     assert len(sliver['warnings']) == 1 and 'inside the age prior' in sliver['warnings'][0]
     assert '0.41% of the age prior' in sliver['warnings'][0] and '(3.46x)' in sliver['warnings'][0]
     assert config.load_config(os.path.join(config.CONFIG_DIR, 'lhs1140b.toml'), ['model.step_fn=false',
                               'params.age.bounds=[3.1e9, 1e10]'])['warnings'] == [] # no drop without step_fn
     assert cfg['free'] == ['log_f_atm', 'Mp', 'age', 'eps']
-    sv = cfg['solve'] # SPEC amendment 2: solve mode on the outflow H fraction
+    sv = cfg['solve'] # solve mode on the outflow H fraction
     assert config.solve_on(cfg) and (sv['param'], sv['observable'], sv['index']) == ('log_f_atm',
                                                                                     'outflow_H_fraction', 0)
     assert cfg['sampled'] == ['u_outflow_H_fraction', 'Mp', 'age', 'eps'] and sv['name'] == 'u_outflow_H_fraction'
-    v = np.log10(0.00115)
+    v = np.log10(0.00115) # the datum in its log10 space
     assert sv['bounds'] == pytest.approx([v - 6*0.261, v + 6*0.240]) and (sv['tol'], sv['max_evals']) == (0.01, 40)
     assert list(cfg['observables']) == ['Mp', 'Rp', 'Mdot_HHe', 'outflow_H_fraction']
     assert cfg['model']['composition'] == 'legacy' and cfg['model']['step_fn'] and cfg['model']['dynamic_phi']
-    assert cfg['model']['rad_evol'] and cfg['params']['Rp_fixed']['value'] is None # SPEC amendment A8
+    assert cfg['model']['rad_evol'] and cfg['params']['Rp_fixed']['value'] is None # the radius evolves
     assert (cfg['model']['n_steps'], cfg['model']['n_atmodeller']) == (100000, 100)
     p = {name: q['value'] for name, q in cfg['params'].items()}
     assert (p['F_final'], p['t_sat'], p['t_pms'], p['log_F0_ratio'], p['eps']) == (0.17, 3.128e9, 1e8, -3.0, 0.15)
@@ -127,9 +149,10 @@ def test_example_configs():
     assert (s['init'], s['bisect_observable'], s['bisect_param'], s['reset_stuck_at']) == (
         'solve', 'outflow_H_fraction', 'log_f_atm', 0)
     assert config.resolution_source(cfg) == 'solve' and config.resolution_source(cfg, solve = False) == 'bisect'
-    assert EqTemp(cfg['planet']['Fp']) == pytest.approx(225.61, abs = 0.01)
+    assert EqTemp(cfg['planet']['Fp']) == pytest.approx(225.61, abs = 0.01) # [K]
     assert config.choose_nwalkers(cfg, 6) == 24 and config.choose_nwalkers(cfg, 3) == 24
-    # the working copies in the results folder: the same physics; static_phi differs in dynamic_phi only
+    # the working copies in the results folder: the same physics; static_phi differs in dynamic_phi only. Both
+    # budget 6 GB for the workers without checking the available memory
     results = os.path.join(os.path.dirname(config.__file__), '..', '..', '..', 'mcmc_results', 'configs')
     if os.path.exists(os.path.join(results, 'lhs1140b.toml')):
         work = config.load_config(os.path.join(results, 'lhs1140b.toml'))
@@ -150,9 +173,13 @@ def test_example_configs():
     ('observables.Rp', 'sgima', 'sigma'),
     ('params', 'log_fatm', 'log_f_atm'),
     ('observables', 'rp', 'Rp'),
-    ('', 'sampelr', 'sampler'),
+    ('', 'sampelr', 'sampler'), # a top-level key
 ])
 def test_unknown_key_suggestions(where, key, hint):
+    '''
+    Checks that a misspelt key anywhere in a config (a section, an option, a parameter or observable name, or a key
+    of their tables) is an error that suggests the right name.
+    '''
     raw = minimal()
     node = raw
     for part in filter(None, where.split('.')):
@@ -163,7 +190,7 @@ def test_unknown_key_suggestions(where, key, hint):
 
 
 @pytest.mark.parametrize('overrides, match', [
-    ({'model.n_steps': 2e6}, 'allow_large_n_steps'),
+    ({'model.n_steps': 2e6}, 'allow_large_n_steps'), # above 1e6 (about 1.1 GB per 1e6 steps per worker)
     ({'model.n_atmodeller': 0, 'observables.VMR_H2O': {'use': True, 'value': 1e-3, 'sigma': 1.0,
                                                        'space': 'log10'}}, 'needs Atmodeller'),
     ({'model.n_atmodeller': 0, 'observables.mmw': {'use': True, 'value': 3.0, 'sigma': 1.0}}, 'needs Atmodeller'),
@@ -173,17 +200,17 @@ def test_unknown_key_suggestions(where, key, hint):
     ({'observables.Rp.sigma': [0.1, -0.1]}, 'must be > 0'),
     ({'observables.Rp.value': math.nan}, 'NaN'),
     ({'observables.Mdot': {'use': True, 'value': 0.0, 'sigma': 0.3, 'space': 'log10'}}, 'needs value > 0'),
-    ({'params.Mp': {'vary': True, 'bounds': [0.5, 6.0]}}, r'outside the valid range \[1, 21\]'),
+    ({'params.Mp': {'vary': True, 'bounds': [0.5, 6.0]}}, r'outside the valid range \[1, 21\]'), # the melt grid
     ({'params.Mp': {'vary': True, 'bounds': [4.5, 22.0]}}, 'outside the valid range'),
     ({'params.Mp': {}}, 'Mp is required'),
-    ({'params.log_f_atm.bounds': [-5.0, 0.0]}, 'outside the valid range'),
+    ({'params.log_f_atm.bounds': [-5.0, 0.0]}, 'outside the valid range'), # log_f_atm < 0
     ({'params.log_f_atm.value': -1.0}, 'outside its bounds'),
     ({'params.log_f_atm.bounds': None}, 'needs bounds'),
     ({'params.t_sat': {'vary': True, 'prior': 'loguniform', 'bounds': [0.0, 1e9]}}, 'bounds > 0'),
     ({'params.eps': {'vary': True, 'prior': 'normal', 'mu': 0.15}}, 'needs mu and sigma'),
-    ({'params.eps': {'vary': True, 'bounds': [0.0, 0.5]}}, 'outside the valid range'),
-    ({'params.age': {'vary': True, 'bounds': [1e5, 1e10]}}, 'outside the valid range'),
-    ({'params.albedo': 1.0}, 'outside the valid range'),
+    ({'params.eps': {'vary': True, 'bounds': [0.0, 0.5]}}, 'outside the valid range'), # eps in (0, 1]
+    ({'params.age': {'vary': True, 'bounds': [1e5, 1e10]}}, 'outside the valid range'), # the age must exceed t0
+    ({'params.albedo': 1.0}, 'outside the valid range'), # albedo in [0, 1)
     ({'params.log_f_atm.prior': 'flat'}, 'must be one of'),
     ({'model.composition': 'legacy', 'params.log_metallicity': 0.5}, 'needs model.composition = "ratios"'),
     ({'model.composition': 'legacy', 'params.log_CtoH_enhancement': {'vary': True, 'bounds': [-1, 1]}},
@@ -200,7 +227,7 @@ def test_unknown_key_suggestions(where, key, hint):
     ({'resolution.n_steps': []}, 'must be a non-empty list'),
     ({'solve.derivative': 'backward'}, 'must be "forward" or "central"'),
     ({'model.mechanism': 'XUV+RR'}, 'must be one of'),
-    ({'model.melt_fraction_override': 0.0}, 'treats 0.0 as'),
+    ({'model.melt_fraction_override': 0.0}, 'treats 0.0 as'), # isocalc reads 0.0 as false: the melt grid
     ({'sampler.nwalkers': 7}, 'must be even'),
     ({'sampler.moves': 'walk'}, 'must be one of'),
     ({'star.luminosity': None}, 'needs luminosity'),
@@ -209,7 +236,7 @@ def test_unknown_key_suggestions(where, key, hint):
     ({'sampler.init': 'bisect', 'sampler.bisect_param': 'age'}, "bisect_param = 'age' must be a free parameter"),
     ({'sampler.init': 'bisect', 'sampler.bisect_observable': 'fatm'}, 'must be an active observable'),
     ({'sampler.init': 'bisect', 'observables.Mp': {'use': True, 'value': 5.6, 'sigma': 0.2},
-      'sampler.bisect_observable': 'Mp'}, 'computed by the model'),
+      'sampler.bisect_observable': 'Mp'}, 'computed by the model'), # Mp is an input, not a model output
     ({'sampler.bisect_observable': 'outflow_H_frac'}, "did you mean 'outflow_H_fraction'"),
     ({'sampler.bisect_param': 'log_fatm'}, "did you mean 'log_f_atm'"),
     ({'sampler.bisect_draws': 0}, 'must be >= 1'),
@@ -218,6 +245,10 @@ def test_unknown_key_suggestions(where, key, hint):
     ({'params.Rp_fixed': -1.0}, 'outside the valid range'),
 ])
 def test_validation_errors(overrides, match):
+    '''
+    Checks that each invalid config is refused with a ConfigError whose message says what is wrong (match). An
+    override value of None deletes that key from the minimal config instead.
+    '''
     raw = minimal()
     for key in [k for k, v in overrides.items() if v is None]: # None deletes the key
         *path, last = key.split('.')
@@ -230,6 +261,12 @@ def test_validation_errors(overrides, match):
 
 
 def test_allowed_edge_cases():
+    '''
+    Checks edge cases that must load: n_steps above 1e6 with allow_large_n_steps, refit_steps sorted without
+    duplicates (or empty), refit_steps without warm starts (a note, not an error), any Mp without the melt grid
+    (Atmodeller off, or a melt-fraction override), asymmetric sigma as a tuple, the warnings of T_surf, the
+    Johnstone flux model and the legacy O/H enhancement, and an unused observable without value and sigma.
+    '''
     cfg = load({'model.n_steps': 2e6, 'model.allow_large_n_steps': True})
     assert cfg['model']['n_steps'] == 2000000
     assert load({'model.n_steps': 10**30, 'model.allow_large_n_steps': True})['model']['n_steps'] == 10**30
@@ -243,7 +280,7 @@ def test_allowed_edge_cases():
     assert not any('refit_steps' in note for note in load(dict(solving, **{'solve.warm_start': False}))['notes'])
     cfg = load({'model.n_atmodeller': 0, 'params.Mp': 0.5}) # no melt grid without Atmodeller
     assert cfg['warnings'] == ['uncoupled: Atmodeller off (n_atmodeller = 0)']
-    cfg = load({'model.melt_fraction_override': 0.3, 'params.Mp': 30.0})
+    cfg = load({'model.melt_fraction_override': 0.3, 'params.Mp': 30.0}) # nor with a melt fraction override
     assert cfg['params']['Mp']['value'] == 30.0
     cfg = load({'observables.Rp.sigma': [0.02, 0.03]})
     assert cfg['observables']['Rp']['sigma'] == (0.02, 0.03)
@@ -258,7 +295,11 @@ def test_allowed_edge_cases():
 
 
 def test_generic_example():
-    # TOI-406 b: radius and mass only, a planet without an outflow constraint
+    '''
+    Checks the TOI-406 b example, a planet with only a radius and a mass and no outflow constraint: no warnings,
+    log_f_atm, Mp and age free, init = "prescan" and the ratios composition. With solve.param = "log_f_atm" it
+    samples u_Rp in place of log_f_atm, within 6 sigma of the radius datum (1.55 +- 0.06 R_earth).
+    '''
     cfg = config.load_config(os.path.join(config.CONFIG_DIR, 'toi406b.toml'))
     assert cfg['warnings'] == [] and cfg['free'] == ['log_f_atm', 'Mp', 'age']
     assert list(cfg['observables']) == ['Mp', 'Rp'] and not config.solve_on(cfg)
@@ -269,10 +310,16 @@ def test_generic_example():
 
 
 def test_solve_config():
+    '''
+    Checks the solve-mode settings: u_Rp sampled in place of log_f_atm, init = "solve" by default (and in place of
+    "bisect", with a note), the label, unit and support of u (range_sigma = 6 sigmas each side of the datum; one
+    side only for a limit, with a warning), the sampler's view of the params, the init draws of u from the split
+    normal of the data, and the errors of a bad [solve] section.
+    '''
     cfg = load({'solve.param': 'log_f_atm', 'params.age': {'vary': True, 'bounds': [1e9, 1e10]}})
     assert cfg['sampled'] == ['u_Rp', 'age'] and cfg['sampler']['init'] == 'solve' # the default in solve mode
     assert cfg['solve']['label'] == '$R_p$ (sampled)' and cfg['solve']['unit'] == 'R_earth'
-    view = prm.sampled_cfg(cfg)
+    view = prm.sampled_cfg(cfg) # u as a uniform parameter on its support, for the params functions
     assert view['free'] == ['u_Rp', 'age'] and view['params']['u_Rp']['bounds'] == pytest.approx([1.58, 1.88])
     assert prm.centre_theta(view)[0] == 1.73 and prm.in_support('u_Rp', 1.6, view)
     assert not prm.in_support('u_Rp', 1.5, view) and cfg['params'] is not view['params']
@@ -305,6 +352,11 @@ def test_solve_config():
 
 
 def test_bisect_and_resolution_source():
+    '''
+    Checks the bisection target (by default log_f_atm along which Rp is matched) and the default source of the
+    resolution study's test points: "bisect" with init = "bisect", else "prescan"; "solve" needs solve mode. A
+    limit as the bisection target warns that the walkers start on the boundary of the allowed region.
+    '''
     cfg = load({'sampler.init': 'bisect'}) # the default observable Rp and parameter log_f_atm
     assert config.bisect_target(cfg) == ('log_f_atm', 'Rp') and cfg['warnings'] == []
     assert config.resolution_source(cfg) == 'bisect' and config.resolution_source(load()) == 'prescan'
@@ -318,6 +370,11 @@ def test_bisect_and_resolution_source():
 
 
 def test_rp_fixed():
+    '''
+    Checks params.Rp_fixed, a constant radius (isocalc's Rp_override): set, fixed or free, it switches
+    model.rad_evol off with a warning, since isocalc applies the override only without radius evolution. Unset
+    (the default) it is None and the radius evolves. The README table lists it as unset.
+    '''
     cfg = load({'params.Rp_fixed': 1.7})
     assert cfg['params']['Rp_fixed']['value'] == 1.7 and cfg['model']['rad_evol'] is False
     assert any('rad_evol is switched to false' in w for w in cfg['warnings'])
@@ -332,6 +389,12 @@ def test_rp_fixed():
 
 
 def test_overrides():
+    '''
+    Checks --set overrides: TOML values (numbers, lists, booleans, quoted strings) with a bare string as the
+    fallback (phoenix), spaces around '=', a number as the shorthand of a fixed parameter, and parameters made
+    free. The same overrides as a dict, of values or of their strings, give the same config. A malformed override
+    is an error.
+    '''
     raw = minimal()
     raw['params']['F_final'] = 0.17 # shorthand for a fixed parameter
     overrides = ['model.n_steps=2e4', 'params.log_f_atm.bounds=[-4, -2]', 'params.log_f_atm.value = -3',
@@ -364,6 +427,11 @@ def test_overrides():
 
 
 def test_dump_toml_round_trip():
+    '''
+    Checks that config.dump_toml writes TOML that tomllib reads back to the same dict: quotes in strings,
+    booleans, small and large floats, +-inf, nested and empty lists, inline and empty tables, keys that need
+    quotes and unicode; None values are left out. The shipped example and template round-trip too.
+    '''
     raw = {'name': 'a "quoted" name', 'flag': True, 'off': False, 'n': 3, 'x': 1e-05, 'big': 1e16, 'neg': -0.5,
            'inf': math.inf, 'ninf': -math.inf, 'lst': [1.0, 2.5, -3e-8], 'nested': [[1, 2], [3]],
            'strs': ['XUV', 'power law'], 'empty_list': [],
@@ -373,7 +441,7 @@ def test_dump_toml_round_trip():
     text = config.dump_toml(raw)
     assert tomllib.loads(text) == raw
     with_none = copy.deepcopy(raw)
-    with_none['model']['skip'] = None
+    with_none['model']['skip'] = None # TOML has no null: the key is dropped
     assert tomllib.loads(config.dump_toml(with_none)) == raw
     for name in ('lhs1140b.toml', 'template.toml'):
         with open(os.path.join(config.CONFIG_DIR, name), 'rb') as f:
@@ -382,6 +450,11 @@ def test_dump_toml_round_trip():
 
 
 def test_resolved_json_round_trip(tmp_path):
+    '''
+    Checks that a resolved config survives config.json (save_resolved, load_resolved) exactly: an asymmetric sigma
+    comes back as a tuple, floats at full (repr) precision, and the write goes through a temporary file that is
+    gone afterwards.
+    '''
     cfg = load({'observables.Rp.sigma': [0.02, 0.03], 'observables.Mdot': {
         'use': True, 'value': 2e5, 'sigma': 0.13, 'space': 'log10', 'kind': 'upper'},
         'params.age': {'vary': True, 'prior': 'normal', 'mu': 5e9, 'sigma': 1e9},
@@ -399,6 +472,11 @@ def test_resolved_json_round_trip(tmp_path):
 ###_____params_____###
 
 def prior_cfg():
+    '''
+    A config with one free parameter of each kind of prior: log_f_atm uniform in [-5, -1], t_sat loguniform in
+    [1e8, 5e9] yr, Mp normal 5.6 +- 0.19 M_earth without bounds (its support is then the valid range [1, 21] of
+    the melt grid), and eps normal 0.15 +- 0.05 truncated to [0.05, 0.5]
+    '''
     return load({'params.log_f_atm': {'vary': True, 'bounds': [-5.0, -1.0]},
                  'params.t_sat': {'vary': True, 'prior': 'loguniform', 'bounds': [1e8, 5e9]},
                  'params.Mp': {'vary': True, 'prior': 'normal', 'mu': 5.6, 'sigma': 0.19},
@@ -406,8 +484,14 @@ def prior_cfg():
 
 
 def test_log_prior():
+    '''
+    Checks the log prior up to a constant (uniform 0, loguniform -ln x, normal -0.5 z**2): -inf outside the support
+    and for NaN or inf, closed bounds, and a ValueError for a theta of the wrong length. Also theta_to_params,
+    prior_box (mu +- 4 sigma for a normal prior without bounds), centre_theta (the params' values; the geometric
+    middle of a loguniform prior) and unit_cube.
+    '''
     cfg = prior_cfg()
-    assert cfg['free'] == ['log_f_atm', 'Mp', 'eps', 't_sat']
+    assert cfg['free'] == ['log_f_atm', 'Mp', 'eps', 't_sat'] # registry order
     theta = np.array([-3.0, 5.8, 0.2, 1e9])
     expected = -0.5*((5.8 - 5.6)/0.19)**2 - 0.5*((0.2 - 0.15)/0.05)**2 - np.log(1e9)
     assert prm.log_prior(theta, cfg) == pytest.approx(expected, rel = 1e-12)
@@ -430,6 +514,11 @@ def test_log_prior():
 
 
 def test_lhs_marginals():
+    '''
+    Checks the prior draws: every Latin-hypercube draw lies in the support, each marginal follows its prior (a
+    Kolmogorov-Smirnov test), and each falls exactly once into every 1/n stratum of its CDF. Plain random draws
+    stay in the support too, and a seed always gives the same draws.
+    '''
     cfg = prior_cfg()
     n = 2000
     draws = prm.sample_prior(cfg, n, np.random.default_rng(1))
@@ -448,6 +537,11 @@ def test_lhs_marginals():
 
 
 def test_jitter_and_ball_stay_in_support():
+    '''
+    Checks that jitter keeps points inside the prior support, even points on or next to a bound, at 1e-3 and 0.3
+    of the prior box, and that at the default scale (1e-3) a point moves by less than 1% of the box. ball starts
+    the walkers around the params' values with a spread of about init_scale (default 1% of the box width).
+    '''
     cfg = prior_cfg()
     rng = np.random.default_rng(4)
     edge = np.array([-1.0, 5.6, 0.0500001, 5e9]) # on or next to the bounds
@@ -467,6 +561,12 @@ def test_jitter_and_ball_stay_in_support():
 
 
 def test_nwalkers_auto_rule():
+    '''
+    Checks the auto rule of sampler.nwalkers: max(4 ndim, 16), rounded up to a multiple of 4 x workers with the
+    default "de" moves (DESnooker updates the walkers in 4 groups, one pool map each) or of 2 x workers otherwise,
+    so that every worker is busy in each map; always the smallest such multiple. A given nwalkers is used as it is,
+    but must be even and >= 2 ndim.
+    '''
     assert [config.auto_nwalkers(d, 6) for d in (1, 2, 3, 4, 5, 6, 7, 12, 13)] == [24]*6 + [48, 48, 72]
     assert config.auto_nwalkers(3, 6, 'stretch') == 24 and config.auto_nwalkers(3, 6, 'de_only') == 24
     assert config.auto_nwalkers(5, 6, 'stretch') == 24 and config.auto_nwalkers(7, 6, 'stretch') == 36

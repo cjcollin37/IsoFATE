@@ -1,7 +1,9 @@
 '''
-Tests of the bisection initializer (isofate.mcmc.search, sampler.init = "bisect", check --bisect), the safer
-jitter of the starting points, grid scans (isofate.mcmc.scan, the scan command) and run comparisons (the compare
-command), on the toy backend: in one process, or with pools of at most 2 spawn workers.
+Tests of the bisection initializer (isofate.mcmc.search; sampler.init = "bisect", check --bisect), the safe jitter
+of the starting points, grid scans (isofate.mcmc.scan, the scan command) and run comparisons (the compare
+command), on the toy backend: in one process, or with pools of at most 2 spawned workers.
+The bisection moves each prior draw along one parameter (default log_f_atm) until one observable (default Rp)
+matches its datum, to start the walkers on a thin surface that no prior draw hits by chance.
 '''
 
 from isofate.mcmc import env
@@ -20,22 +22,36 @@ from isofate.mcmc import params as prm
 from isofate.mcmc.__main__ import main
 
 EXAMPLE = os.path.join(config.CONFIG_DIR, 'lhs1140b.toml')
+# the example on the toy at 2e4 steps, on 2 workers
 TOY = ['model.backend="toy"', 'parallel.cache=false', 'parallel.warmup=false', 'model.n_steps=20000',
        'parallel.workers=2', 'solve.param=""', 'sampler.init="bisect"'] # the bisection, without solve mode
+# the radius and mass fit: eps fixed, the outflow observables off
 RP_ONLY = ['params.eps.vary=false', 'observables.outflow_H_fraction.use=false', 'observables.Mdot_HHe.use=false']
 
 
 def toy_cfg(tmp_path, *overrides):
+    '''
+    The toy config of TOY, writing to tmp_path, with more --set overrides
+    '''
     return config.load_config(EXAMPLE, TOY + [f'output_root="{tmp_path}"', *overrides])
 
 
 def quiet(*args, **kwargs):
+    '''
+    A log function that prints nothing
+    '''
     pass
 
 
 ###_____Bisection_____###
 
 def test_bisect_on_rp(tmp_path):
+    '''
+    Checks the bisection of log_f_atm on Rp: at least 8 draws converge to within bisect_tol (0.1 sigma) of the
+    datum, in 1-3 batches with a log line each; only log_f_atm moves, the root lies inside its final bracket, and
+    lp and blobs are those of the model at the point. Also the outcome counts, the number of evaluations, the saved
+    file, and the choice of the walkers' starts: 8 distinct draws of the best 16.
+    '''
     cfg = toy_cfg(tmp_path, 'sampler.bisect_observable="Rp"') # the default observable of any planet
     pool = model.LocalPool(cfg)
     lines = []
@@ -53,6 +69,7 @@ def test_bisect_on_rp(tmp_path):
     for i in ok[:3]: # lp and blobs are those of model.log_prob at the point
         res = model.evaluate(result['point'][i], cfg)
         assert res['lp'] == result['lp'][i] and res['obs']['Rp'] == result['blobs']['Rp'][i]
+    # every search starts from both prior bounds
     assert np.all(result['hist_x'][:, 0] == -5.0) and np.all(result['hist_x'][:, 1] == -1.3)
     counts = search.counts(result)
     assert sum(counts[name] for name in search.OUTCOMES.values()) == len(result['outcome'])
@@ -70,7 +87,11 @@ def test_bisect_on_rp(tmp_path):
 
 
 def test_bisect_another_observable_and_parameter(tmp_path):
-    # the final atmospheric mass fraction in log10 space, bisected along the age
+    '''
+    Checks the bisection of another observable along another parameter: the final atmospheric mass fraction
+    (1e-4 +- 0.3 dex, in log10 space) along the age. The points converge to within 0.1 sigma (0.03 dex) and stay
+    inside the age prior, with the age alone moved.
+    '''
     cfg = toy_cfg(tmp_path, *RP_ONLY, 'observables.fatm={use = true, value = 1e-4, sigma = 0.3, space = "log10"}',
                   'sampler.bisect_observable="fatm"', 'sampler.bisect_param="age"')
     result = search.bisect_points(cfg, model.LocalPool(cfg), 6, np.random.default_rng(4), quiet)
@@ -84,6 +105,11 @@ def test_bisect_another_observable_and_parameter(tmp_path):
 
 
 def test_bisect_check_single_draw(tmp_path):
+    '''
+    Checks the bisection of single draws, as check --bisect runs it, with its iteration table, and the rules for
+    an undefined or infinite g. A NaN end takes the sign opposite to the finite end, so a bracket can close on the
+    edge of the stripped region without a root; an infinite g (log10 of 0 with floor 0) is defined and has a sign.
+    '''
     cfg = toy_cfg(tmp_path, *RP_ONLY, 'sampler.bisect_observable="Rp"')
     theta = [-2.5, 5.6, 5e9]
     result = search.run_bisection(cfg, [theta], model.LocalPool(cfg))
@@ -119,6 +145,11 @@ def test_bisect_check_single_draw(tmp_path):
 
 @pytest.mark.parametrize('value, sign, why', [(0.5, '>', 'bare-core radius'), (5.0, '<', 'largest log_f_atm')])
 def test_bisect_no_bracket_message(tmp_path, value, sign, why):
+    '''
+    Checks the message when no draw has a sign change, with the fallback off: an Rp datum below the bare-core
+    radius (g > 0 at both ends) or above what the largest log_f_atm gives (g < 0). After 3 batches of 10 draws the
+    text names the case, its likely cause and what to try; init_bisect raises it, after saving bisect.npz.
+    '''
     cfg = toy_cfg(tmp_path, *RP_ONLY, f'observables.Rp.value={value}', 'sampler.bisect_observable="Rp"',
                   'sampler.bisect_fallback=false')
     pool = model.LocalPool(cfg)
@@ -133,7 +164,11 @@ def test_bisect_no_bracket_message(tmp_path, value, sign, why):
 
 
 def test_bisect_fallback(tmp_path):
-    cfg = toy_cfg(tmp_path, *RP_ONLY, 'observables.Rp.value=0.5', 'sampler.bisect_observable="Rp"')
+    '''
+    Checks the fallback of a failed bisection (sampler.bisect_fallback, on by default): init_bisect warns once,
+    with the reason, and starts the walkers from a prescan instead.
+    '''
+    cfg = toy_cfg(tmp_path, *RP_ONLY, 'observables.Rp.value=0.5', 'sampler.bisect_observable="Rp"') # below the core
     assert cfg['sampler']['bisect_fallback'] # the default
     warnings = []
     coords, lp, blobs = sampler.init_bisect(cfg, model.LocalPool(cfg), 8, np.random.default_rng(1), str(tmp_path),
@@ -144,6 +179,11 @@ def test_bisect_fallback(tmp_path):
 
 
 def test_run_with_bisect_init(tmp_path):
+    '''
+    Checks a short run with init = "bisect" on Rp: the log shows the bisection, bisect.npz holds at least 16
+    converged draws, and the 16 walkers (4 free parameters, eps included) start from them. The evaluations of the
+    initialization count the preflight, both ends of each draw and the rounds.
+    '''
     cfg = toy_cfg(tmp_path, 'sampler.bisect_observable="Rp"', 'sampler.nwalkers=16', 'sampler.max_steps=10',
                   'sampler.tracks=0', 'sampler.check_every=10', 'sampler.reset_stuck_at=0')
     run_dir = sampler.run_mcmc(cfg, workers = 2, make_plots = False)
@@ -153,12 +193,19 @@ def test_run_with_bisect_init(tmp_path):
         assert (d['outcome'] == search.CONVERGED).sum() >= 16
     run = sampler.load_run(run_dir)
     assert run['summary']['settings']['init'] == 'bisect' and run['chain'].shape == (10, 16, 4)
+    # 48 draws per batch (3 x nwalkers)
     assert sum(run['summary']['evaluations']['init'].values()) > 2*48 # preflight, both ends, rounds
 
 
-###_____Safer jitter_____###
+###_____Safe jitter_____###
 
 def test_safe_jitter_keeps_walkers_on_a_ridge(tmp_path):
+    '''
+    Checks that safe_jitter keeps starting points on a thin ridge. With Rp known to 1e-4 R_earth the ridge in
+    log_f_atm is so thin that a plain jitter of 1e-3 of the prior box costs about 20 in lp. safe_jitter halves the
+    jitter until no point loses more than JITTER_DLP = 5, keeps the points distinct and re-evaluates them. With no
+    halving left, distinct points keep their unjittered position, and copies take their best try.
+    '''
     # Rp to 1e-4 R_earth: a thin ridge in log_f_atm, where a jitter of 1e-3 of the prior box costs ~20 in lp
     cfg = toy_cfg(tmp_path, *RP_ONLY, 'observables.Rp.sigma=1e-4', 'sampler.bisect_observable="Rp"')
     pool = model.LocalPool(cfg)
@@ -186,7 +233,15 @@ def test_safe_jitter_keeps_walkers_on_a_ridge(tmp_path):
 
 def toy_file(tmp_path, name = 'toy', **sampler_options):
     '''
-    A toy-backend copy of the LHS 1140 b example in tmp_path (all observables as in the example).
+    Writes a toy-backend copy of the LHS 1140 b example to tmp_path/<name>.toml, for the commands: all observables
+    as in the example, init = "bisect" on Rp without solve mode, 16 walkers, 10 steps and 4 tracks
+
+    Inputs:
+        - tmp_path: folder of the file, and its output_root [Path]
+        - name: the config's name [str]
+        - sampler_options: more [sampler] options [dict]
+
+    Output: path of the config [str]
     '''
     with open(EXAMPLE, 'rb') as f:
         raw = tomllib.load(f)
@@ -204,6 +259,11 @@ def toy_file(tmp_path, name = 'toy', **sampler_options):
 
 
 def test_scan_axes():
+    '''
+    Checks the axes of a scan: name=lo:hi:n gives n values from lo to hi, both included; values outside the prior, a
+    fixed or misspelt parameter and a malformed axis are errors. The grid of two axes runs x fastest, with the other
+    parameters at their values, and by default a scan draws the active observables that the model computes.
+    '''
     cfg = config.load_config(EXAMPLE, TOY)
     name, values = scan.parse_axis('log_f_atm=-3.1:-2.9:81', cfg)
     assert name == 'log_f_atm' and len(values) == 81 and values[0] == -3.1 and values[-1] == -2.9
@@ -216,13 +276,18 @@ def test_scan_axes():
     with pytest.raises(config.ConfigError, match = 'name=lo:hi:n'):
         scan.parse_axis('log_f_atm=-3:-2', cfg)
     thetas, shape = scan.grid_thetas(cfg, ('log_f_atm', np.array([-3.0, -2.0])), ('age', np.array([4e9, 5e9, 6e9])))
-    assert shape == (3, 2) and thetas.shape == (6, 4)
+    assert shape == (3, 2) and thetas.shape == (6, 4) # (ny, nx); theta in the order of log_f_atm, Mp, age, eps
     assert thetas[:, 0].tolist() == [-3.0, -2.0]*3 and thetas[:, 2].tolist() == [4e9, 4e9, 5e9, 5e9, 6e9, 6e9]
     assert np.all(thetas[:, 1] == 5.6) and np.all(thetas[:, 3] == 0.15) # the others at their values
     assert scan.scan_observables(cfg) == ['Rp', 'Mdot_HHe', 'outflow_H_fraction']
 
 
 def test_scan_1d_and_2d(tmp_path, capsys):
+    '''
+    Checks the scan command in 1-D (16 values of log_f_atm at 5 Gyr) and in 2-D (6 x 4 over log_f_atm and age,
+    with chosen observables and --out): scan.npz, the printed best point and scan.png, which plot_dir draws again.
+    An axis outside the prior and an unknown observable are errors.
+    '''
     path = toy_file(tmp_path)
     assert main(['scan', path, '--x', 'log_f_atm=-3:-1.5:16', '--theta', 'age=5e9', '--workers', '1']) == 0
     out = capsys.readouterr().out
@@ -246,7 +311,11 @@ def test_scan_1d_and_2d(tmp_path, capsys):
 
 
 def test_scan_floor_cells(tmp_path):
-    # 2-D scan colour scales skip cells at the log10 floor (e.g. Mdot_HHe = 0 of stripped planets)
+    '''
+    Checks the cells that a 2-D scan leaves out of its colour scale: those at the log10 floor of an observable (e.g.
+    Mdot_HHe = 0 of stripped planets), which would otherwise set the scale and flatten everything else. Nothing is
+    singled out when every value is at the floor, nor for a linear observable or one that is not fitted.
+    '''
     cfg = toy_cfg(tmp_path)
     mdot, rp = cfg['observables']['Mdot_HHe'], cfg['observables']['Rp']
     values = np.array([[-3.0, 4.5], [4.6, np.nan]]) # log10 of 0 (floor 1e-3 kg/s), two rates, undefined
@@ -258,6 +327,11 @@ def test_scan_floor_cells(tmp_path):
 ###_____check --bisect, run --bisect-*, compare_____###
 
 def test_check_bisect_cli(tmp_path, capsys):
+    '''
+    Checks check --bisect: one bisection at the given point, printed round by round. The toy never reaches the
+    outflow H fraction of 0.00115, so there is no root (exit code 1); an input such as Mp cannot be bisected (exit
+    code 2).
+    '''
     path = toy_file(tmp_path)
     assert main(['check', path, '--bisect', '--theta', 'log_f_atm=-2.5', '--theta', 'age=5e9']) == 0
     out = capsys.readouterr().out
@@ -271,8 +345,13 @@ def test_check_bisect_cli(tmp_path, capsys):
 
 
 def test_compare_runs(tmp_path, capsys):
+    '''
+    Checks the compare command on two toy runs (dynamic_phi on and off): compare.txt and its three figures in a new
+    folder compare_<stamp> next to the first run, and the text, also printed, with each run's settings, statistics
+    and posterior medians. One run, a wrong number of labels and an existing output folder are errors.
+    '''
     a = toy_file(tmp_path, 'toy_a')
-    b = toy_file(tmp_path, 'toy_b', seed = 7)
+    b = toy_file(tmp_path, 'toy_b', seed = 7) # another seed
     assert main(['run', a, '--no-plots']) == 0
     assert main(['run', b, '--no-plots', '--set', 'model.dynamic_phi=false']) == 0
     (run_a,) = [os.path.join(tmp_path, 'toy_a', d) for d in os.listdir(tmp_path/'toy_a')]
