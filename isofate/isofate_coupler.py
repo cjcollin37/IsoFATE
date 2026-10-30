@@ -222,7 +222,11 @@ dynamic_phi = False):
         mu = state[escape_kernel.MU_ATM]
         y1, y2, y3, y4, y5, y6, y7 = y
         N_H_int, N_He_int, N_D_int, N_O_int, N_C_int, N_N_int, N_S_int = y_int
-        X_DH = state[escape_kernel.X_DH]
+        # D/(H + D) of the whole inventory Atmodeller is about to re-equilibrate, i.e. after the escape of step
+        # n - 1. (state[X_DH] is set by escape_kernel.advance before that step's loss; splitting with it undid
+        # one step of D/H fractionation at every call, and all of it for n_atmodeller = 1.)
+        N_HD_total = y1 + y3 + N_H_int + N_D_int
+        X_DH = (y3 + N_D_int)/N_HD_total if N_HD_total != 0 else 0.0
 
         ##### run atmodeller ######
         if n == n_steps - 1:
