@@ -15,7 +15,8 @@ dependencies = [
  "numba>=0.62",
  "optimistix==0.0.10",
  "emcee",
- "corner"
+ "corner",
+ "psutil"
 ]
 
 [tool.setuptools.packages.find]
@@ -23,7 +24,12 @@ where = ["."]
 include = ["isofate*"]
 
 [tool.setuptools.package-data]
-isofate = ["data/**/*"]
+isofate = ["data/**/*", "mcmc/configs/*.toml", "mcmc/README.md"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: tests that run the real coupled model (seconds to minutes each); skip them with -m 'not slow'",
+]
 
 [dependency-groups]
 dev = [

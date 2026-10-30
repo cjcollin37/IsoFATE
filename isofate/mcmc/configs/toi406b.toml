@@ -1,0 +1,73 @@
+# TOI-406 b: a generic example with only a radius and a mass, the data most sub-Neptunes and super-Earths have.
+# Star, orbit and data as in Harvard/Research/isofate_mcmc/isofate_MCMC_v2.py (Rp 1.55 +- 0.06 R_earth, Mp 4.57
+# +- 0.70 M_earth, age 3.5-10 Gyr); everything else at the tool's defaults (all options: template.toml). Unlike that
+# script it couples Atmodeller (n_atmodeller = 100) and uses the "ratios" composition.
+# To run it, copy this file to your results folder's configs/ and set output_root = ".." there.
+#
+# Sample it without solve mode. With sigma = 0.06 R_earth the radius ridge is wide enough for plain sampling, and
+# the bare core of a stripped planet (1.46 R_earth at 4.57 M_earth) also fits the radius: 82% of the posterior
+# was stripped (2026-10-29). Solve mode on Rp (--set 'solve.param="log_f_atm"') cannot sample that plateau and
+# returns only the planets that keep an atmosphere (the config then warns; README section 10).
+
+name = "toi406b"
+description = "TOI-406 b: Rp and Mp only (generic example); setup of isofate_MCMC_v2.py"
+# output_root = ".."
+
+[star]
+mass = 0.225                  # [M_sun]
+radius = 0.240                # [R_sun]
+teff = 3075.0                 # [K]; L = 4 pi R^2 sigma Teff^4
+
+[planet]
+period = 19.288               # [days]
+
+[model]
+n_steps = 100000
+n_atmodeller = 100
+step_fn = false               # XUV: saturated until t_sat, then the power law of beta
+flux_model = "power law"
+rad_evol = true
+dynamic_phi = true
+composition = "ratios"
+
+[params]
+t_sat = 2.435e9               # [yr]: t_jump = 5.9 - 15.4*M_star/M_sun Gyr
+log_F0_ratio = -3.0           # F0 = 1e-3 Fp
+eps = 0.15
+
+[params.log_f_atm]
+vary = true
+bounds = [-5.0, -1.3]
+value = -2.7
+
+[params.Mp]
+vary = true
+bounds = [1.0, 8.0]           # [M_earth]; the measurement enters as the Mp observable
+value = 4.57
+
+[params.age]
+vary = true
+bounds = [3.5e9, 1e10]        # [yr]
+value = 5e9
+
+[observables.Rp]              # [R_earth]
+use = true
+value = 1.55
+sigma = 0.06
+
+[observables.Mp]              # [M_earth]; an input: with Mp free it acts as its prior
+use = true
+value = 4.57
+sigma = 0.70
+
+[solve]
+param = ""                    # off; "log_f_atm" samples u = Rp instead of log_f_atm
+observable = "Rp"
+
+[sampler]
+nwalkers = "auto"
+max_steps = 5000
+
+[parallel]
+workers = 6
+max_memory_gb = 8.0

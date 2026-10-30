@@ -1,0 +1,282 @@
+# LHS 1140 b: the physics of isofate/isofate_MCMC.py, with its bugs fixed (see the README), fitted to the
+# outflow composition and mass-loss rate of Cherubim et al. 2026 (Science) and the radius and mass of
+# Cadieux et al. 2024. All options and their defaults are listed in template.toml.
+# To run it, copy this file to your results folder's configs/ and set output_root = ".." there; without
+# output_root, results go to ./mcmc_results in the working directory.
+
+name = "lhs1140b"
+description = "LHS 1140 b: outflow H fraction, H+He mass-loss rate, Rp and Mp; legacy composition, step-function XUV"
+# output_root = ".."
+
+[star]
+mass = 0.18                   # [M_sun]
+radius = 0.22                 # [R_sun]
+teff = 3096.0                 # [K]
+luminosity = 0.0038           # [L_sun] (Cadieux et al. 2024: 0.0038 +- 0.0003); radius and teff alone give 0.00401
+
+[planet]
+period = 24.74                # [days]
+
+[model]
+n_steps = 100000              # 1e5/100: the resolution for a final posterior; the solve-mode runs of 2026-10-28
+n_atmodeller = 100            # at 3e4/100 over-weighted eps > 0.6 by about 1.4x (README section 5)
+step_fn = true                # XUV flux drops to F_final at t_sat
+flux_model = "power law"
+stellar_type = "M1"
+RR = true
+rad_evol = true               # the radius evolves (Lopez & Fortney); params.Rp_fixed (unset here) would fix it
+t0 = 1e6                      # [yr]
+dynamic_phi = true            # the old script used false, which freezes O/C/N/S atmospheres once H and He are gone
+composition = "legacy"        # continuity with the previous runs; "ratios" is recommended (linear in the O/H
+                              # enhancement)
+
+[params]
+F_final = 0.17                # XUV flux after t_sat [W/m2], fixed: eps (free) scales the present-day escape instead
+t_sat = 3.128e9               # [yr]: t_jump = 5.9 - 15.4*M_star/M_sun Gyr
+t_pms = 1e8                   # [yr]
+log_F0_ratio = -3.0           # F0 = 1e-3 Fp
+
+[params.log_f_atm]
+vary = true
+prior = "uniform"
+bounds = [-5.0, -1.3]
+value = -3.0175               # check point: the He-dominated outflow island at 7.6 Gyr, eps 0.15 (scans of 2026-10-28)
+
+[params.age]
+vary = true
+prior = "uniform"
+bounds = [3.128e9, 1e10]      # [yr]; from t_sat (decision 2026-10-28); the paper's minimum age is > 3.12 Gyr
+value = 7.6e9
+# The prior starts at t_sat, not at 3.1 Gyr: with step_fn = true, ages between 3.1 and 3.128 Gyr would still see
+# the saturated XUV today, which is unphysical for this quiet star (131-d rotation, L_X about 6.5e-6 L_bol). That
+# 28-Myr sliver made a spurious second mode (review of 2026-10-28: lp -11.2 at 3.11 Gyr and eps 0.2).
+
+[params.Mp]
+vary = true
+prior = "uniform"
+bounds = [4.5, 6.7]           # [M_earth]; the mass measurement enters as the Mp observable below
+value = 5.6
+
+[params.eps]                  # heating efficiency
+vary = true
+prior = "uniform"
+bounds = [0.01, 1.0]
+value = 0.15
+# The present-day energy-limited Mdot is proportional to eps*F_final. On the island at eps = 0.15 the model gives
+# about 4e4 kg/s, 0.7 dex below the observed 2.03e5 kg/s. Along the ridge a larger eps raises Mdot but lowers Rp:
+# the ridge estimate of 2026-10-28 put eps at about 0.48 (Mdot_HHe 1.2e5 kg/s). eps also changes the whole escape
+# history (the radiation-recombination limited branch does not depend on eps).
+
+# [params.Rp_fixed]           # [R_earth]: a constant radius instead of the Lopez & Fortney one (sets rad_evol = false;
+# value = 1.73                # the Rp observable then acts as a prior on it). Off for LHS 1140 b (decision 2026-10-28).
+
+# The outflow composition (Collin, 2026-10-28): 0.115 (+0.085/-0.052) % in Cherubim et al. 2026 (Science) is
+# p-winds' h_fraction, the H number fraction H/(H+He) of the escaping outflow, fitted with a uniform prior on
+# h_fraction in [1e-4, 1]. Only tracks whose outflow is very H-poor and He-dominated reproduce it.
+[observables.outflow_H_fraction]
+use = true
+value = 0.00115
+space = "log10"
+sigma = [0.261, 0.240]        # [dex] (lo, hi), from 0.115 (+0.085/-0.052) %
+
+[observables.Mdot_HHe]        # [kg/s]: the H+He Parker-wind mass-loss rate, 2.03 (+0.65/-0.55) x 10^8 g/s
+use = true
+value = 2.03e5
+space = "log10"
+sigma = [0.137, 0.121]        # [dex] (lo, hi)
+
+[observables.Rp]              # [R_earth], Cadieux et al. 2024
+use = true
+value = 1.730
+sigma = 0.025
+sigma_model = 0.0             # the radius model is trusted less than the fractionation: e.g. 0.05-0.1 R_earth here
+                              # encodes a radius-model systematic (decision 2026-10-28: 0, observational error only)
+
+[observables.Mp]              # [M_earth], Cadieux et al. 2024; an input: with Mp free it acts as its prior
+use = true
+value = 5.60
+sigma = 0.19
+
+# The legacy outflow observables, off: their zero denominators make them ill-defined (Phi_He = 0 whenever the flux
+# is subcritical); outflow_H_fraction above is the same quantity without that problem.
+[observables.escape_H_He]     # Phi_H/Phi_He, the old script's flux_ratio; equals h_fraction to 0.1% for h << 1
+use = false
+value = 0.0011
+space = "log10"
+sigma = [0.261, 0.240]        # [dex] (lo, hi)
+
+[observables.outflow_He_fraction] # Phi_He/(Phi_H + Phi_He) = 1 - outflow_H_fraction
+use = false
+# value = 0.99885
+# sigma = 0.001
+
+[observables.Mdot]            # total escape rate [kg/s] over every species; Mdot_HHe above is the p-winds quantity
+use = false
+value = 2.03e5
+space = "log10"
+sigma = [0.137, 0.121]        # [dex] (lo, hi)
+
+# The other observables, off. Uncomment value and sigma and set use = true to add one.
+[observables.age]             # [yr] (input); the age prior above already starts at t_sat = 3.128 Gyr
+use = false
+# value = 5e9
+# sigma = 1e9
+
+[observables.Teq]             # [K] (input); Cadieux et al. 2024 (albedo is fixed at 0 here, so this is a constant)
+use = false
+value = 226.0
+sigma = 4.0
+
+[observables.fatm]
+use = false
+# value = 1e-3
+# sigma = 0.5
+# space = "log10"
+
+[observables.Mdot_H]          # [kg/s]
+use = false
+# value = 1e5
+# sigma = 0.5
+# space = "log10"
+
+[observables.Mdot_He]         # [kg/s]; 0 when subcritical, so mostly useful as an upper limit
+use = false
+# value = 1e4
+# sigma = 0.5
+# space = "log10"
+# kind = "upper"
+
+[observables.escape_He_H]     # Phi_He/Phi_H (legacy; prefer outflow_He_fraction)
+use = false
+# value = 1e-3
+# sigma = 0.5
+# space = "log10"
+
+[observables.H_He]
+use = false
+# value = 1.0
+# sigma = 0.5
+# space = "log10"
+
+[observables.C_O]
+use = false
+# value = 0.5
+# sigma = 0.2
+
+[observables.D_H]
+use = false
+# value = 1e-4
+# sigma = 0.5
+# space = "log10"
+# kind = "upper"
+
+[observables.mmw]             # [g/mol]
+use = false
+# value = 4.0
+# sigma = 1.0
+
+[observables.VMR_H2]
+use = false
+# value = 0.1
+# sigma = 1.0
+# space = "log10"
+# sigma_model = 0.5
+
+[observables.VMR_He]
+use = false
+# value = 0.5
+# sigma = 1.0
+# space = "log10"
+
+[observables.VMR_H2O]
+use = false
+# value = 1e-3
+# sigma = 1.0
+# space = "log10"
+# kind = "upper"
+# sigma_model = 0.5
+
+[observables.VMR_CO]
+use = false
+# value = 1e-3
+# sigma = 1.0
+# space = "log10"
+
+[observables.VMR_CO2]
+use = false
+# value = 1e-5
+# sigma = 1.0
+# space = "log10"
+
+[observables.VMR_CH4]
+use = false
+# value = 1e-3
+# sigma = 1.0
+# space = "log10"
+
+[observables.VMR_N2]
+use = false
+# value = 1e-4
+# sigma = 1.0
+# space = "log10"
+
+[observables.VMR_O2]
+use = false
+# value = 1e-10
+# sigma = 1.0
+# space = "log10"
+# kind = "upper"
+
+[observables.VMR_S2]
+use = false
+# value = 1e-8
+# sigma = 1.0
+# space = "log10"
+
+[observables.VMR_SO2]
+use = false
+# value = 1e-10
+# sigma = 1.0
+# space = "log10"
+
+[observables.VMR_H2SO4]
+use = false
+# value = 1e-12
+# sigma = 1.0
+# space = "log10"
+
+[observables.T_surf]          # [K]; surface temperature, not directly observable
+use = false
+# value = 1800.0
+# sigma = 200.0
+
+# Solve mode (SPEC amendment 2): the sampler moves in u = log10 of the outflow H fraction instead of log_f_atm,
+# and each evaluation solves for the log_f_atm that gives that u (with the exact Jacobian in the density). The
+# outflow datum pins log_f_atm to a ridge about 0.003 dex thin that curves through age, Mp and eps (d log10 x /
+# d log_f_atm = 100-750 on it); emcee's moves did not mix on it in log_f_atm (acceptance 0.006-0.008, every walker
+# stuck, 400 steps; mcmc_results/lhs1140b*/mcmc_20261028-165655*). In u the ridge is a smooth, wide coordinate.
+[solve]
+param = "log_f_atm"
+observable = "outflow_H_fraction"
+range_sigma = 6.0             # u in [log10 0.00115 - 6*0.261, log10 0.00115 + 6*0.240] = [-4.51, -1.50]
+tol = 0.01                    # solve until |log10 x - u| <= 0.01 sigma
+max_evals = 40
+warm_start = true
+
+[sampler]
+nwalkers = "auto"             # 24 with 6 workers (or 3) and 4 free parameters
+max_steps = 5000
+seed = 12345
+init = "solve"                # solve mode: u from the outflow datum, the others from the prior, each solved
+# Without solve mode (--set 'solve.param=""' --set sampler.init=bisect), the bisection initializer works along
+# log_f_atm on the outflow H fraction, not on the default Rp: on this planet the radius match (Rp = 1.73 at
+# log_f_atm = -2.73 for 7.6 Gyr, eps 0.15) lies in the H-rich region that the outflow H fraction excludes (a pure
+# H wind there, term -75), so radius bisection would start the walkers off the island, which sits at log_f_atm =
+# -3.017 (check --bisect, 2026-10-28). check --bisect and resolution --no-solve --source bisect use these too.
+bisect_observable = "outflow_H_fraction"
+bisect_param = "log_f_atm"
+reset_stuck_at = 0            # no stuck-walker reset: with most walkers stuck it would copy the few others
+
+[parallel]
+workers = 6
+max_memory_gb = 8.0

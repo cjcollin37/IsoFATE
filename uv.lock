@@ -747,6 +747,7 @@ dependencies = [
     { name = "numba" },
     { name = "numpy" },
     { name = "optimistix" },
+    { name = "psutil" },
     { name = "scipy" },
 ]
 
@@ -764,6 +765,7 @@ requires-dist = [
     { name = "numba", specifier = ">=0.62" },
     { name = "numpy", specifier = "==2.3" },
     { name = "optimistix", specifier = "==0.0.10" },
+    { name = "psutil" },
     { name = "scipy", specifier = "==1.16.1" },
 ]
 
