@@ -502,9 +502,11 @@ above its measurement, since a heavier core is larger. The age is barely constra
   LHS 1140 b, against Teq ≈ 226 K) without condensation, so comparing VMRs with retrievals assumes a well-mixed
   atmosphere: prefer C/O, mmw and H/He, and give VMRs a `sigma_model` of 0.5–1 dex. NH₃, H₂S, OCS and HCN are not
   among Atmodeller's species, and `T_surf` is capped at 6000 K.
-- **D/H depends steeply on b_He_D** in isofate/constants.py, scaled from b_H_D by the reduced mass (Genda & Ikoma
-  2008): the isotopic substitution of the measured H–He coefficient would be 1.62× larger and lower D/H 6–13× on
-  the LHS 1140 b posterior; the fit does not change. D/H comes from the escape kernel (Atmodeller lumps D into H).
+- **D/H depends steeply on b_He_D** in isofate/constants.py. No measured He–D value is known here: the table scales
+  b_H_D (itself an estimate, Genda & Ikoma 2008) by the reduced mass, as if He–D collided like H–D. Scaling the
+  H–He coefficient (Mason & Marrero 1970) from H to D instead, which keeps the He–H interaction that both isotopes
+  share, gives a value 1.62× larger and lowers D/H 6–13× on the LHS 1140 b posterior; the fit does not change.
+  D/H comes from the escape kernel (Atmodeller lumps D into H).
 - **He stops escaping** when the flux is subcritical (Φ_He = 0 is physics): with `step_fn = true`, t_sat = 3.1 Gyr
   and ages ≥ 3.5 Gyr, every H-rich track has an outflow H fraction of 1 today.
 - **`flux_model = "Johnstone"`** reads its data from hard-coded paths in isofunks.py, and its φ_E lacks the
