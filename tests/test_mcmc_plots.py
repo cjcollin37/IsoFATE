@@ -22,7 +22,8 @@ OBSERVABLES = ['observables.Mdot.use=true', 'observables.Mdot.space="log10"', 'o
                'observables.Mdot.kind="upper"', 'observables.VMR_H2O.use=true', 'observables.VMR_H2O.value=1e-3',
                'observables.VMR_H2O.sigma=[0.5, 1.0]', 'observables.VMR_H2O.space="log10"',
                'observables.C_O.use=true', 'observables.C_O.value=0.5', 'observables.C_O.sigma=0.2']
-RP_ONLY = ['params.eps.vary=false', 'observables.outflow_H_fraction.use=false', 'observables.Mdot_HHe.use=false',
+RP_ONLY = ['params.eps.vary=false', 'params.albedo.vary=false',
+           'observables.outflow_H_fraction.use=false', 'observables.Mdot_HHe.use=false',
            'solve.param=""', 'sampler.init="prescan"', 'sampler.reset_stuck_at=0'] # without solve mode
 PNG = b'\x89PNG\r\n\x1a\n' # the first 8 bytes of every PNG file
 

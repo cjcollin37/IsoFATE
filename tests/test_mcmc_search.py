@@ -24,7 +24,9 @@ from isofate.mcmc.__main__ import main
 EXAMPLE = os.path.join(config.CONFIG_DIR, 'lhs1140b.toml')
 # the example on the toy at 2e4 steps, on 2 workers
 TOY = ['model.backend="toy"', 'parallel.cache=false', 'parallel.warmup=false', 'model.n_steps=20000',
-       'parallel.workers=2', 'solve.param=""', 'sampler.init="bisect"'] # the bisection, without solve mode
+       'parallel.workers=2', 'solve.param=""', 'sampler.init="bisect"',
+       'params.albedo.vary=false'] # the bisection, without solve mode;
+# albedo fixed at 0 (the example samples it)
 # the radius and mass fit: eps fixed, the outflow observables off
 RP_ONLY = ['params.eps.vary=false', 'observables.outflow_H_fraction.use=false', 'observables.Mdot_HHe.use=false']
 
@@ -249,6 +251,7 @@ def toy_file(tmp_path, name = 'toy', **sampler_options):
     raw['output_root'] = str(tmp_path)
     raw['model'].update(backend = 'toy', n_steps = 20000)
     raw['parallel'] = {'workers': 2, 'cache': False, 'warmup': False}
+    raw['params']['albedo'] = {'value': 0.0} # fixed (the example samples it)
     raw['solve'] = {'param': ''} # the bisection initializer, without solve mode
     raw['sampler'].update(max_steps = 10, checkpoint_every = 10, print_every = 10, check_every = 10, tracks = 4,
                           track_points = 40, nwalkers = 16, reset_stuck_at = 0, bisect_observable = 'Rp',

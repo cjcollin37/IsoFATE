@@ -28,7 +28,8 @@ TINY = {'n_steps': [2000, 5000], 'n_atmodeller': [100, 10]} # a 2 x 2 grid
 
 
 # the example reduced to the radius and mass fit of 3 free parameters
-RP_ONLY = ['params.eps.vary=false', 'observables.outflow_H_fraction.use=false', 'observables.Mdot_HHe.use=false',
+RP_ONLY = ['params.eps.vary=false', 'params.albedo.vary=false',
+           'observables.outflow_H_fraction.use=false', 'observables.Mdot_HHe.use=false',
            'solve.param=""', 'sampler.init="prescan"', 'sampler.reset_stuck_at=0'] # without solve mode
 
 

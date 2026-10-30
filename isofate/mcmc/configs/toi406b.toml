@@ -51,6 +51,12 @@ vary = true
 bounds = [3.5e9, 1e10]        # [yr]
 value = 5e9
 
+[params.albedo]               # Bond albedo: T = EqTemp(Fp, A)
+vary = true
+prior = "uniform"
+bounds = [0.0, 0.8]           # bare rock to Venus-like clouds (Venus ~0.76, Earth 0.30)
+value = 0.0
+
 [observables.Rp]              # [R_earth]
 use = true
 value = 1.55
@@ -66,7 +72,7 @@ param = ""                    # off; "log_f_atm" samples u = Rp instead of log_f
 observable = "Rp"
 
 [sampler]
-nwalkers = "auto"             # 24 with 6 workers and 3 free parameters, 16 with 2 workers
+nwalkers = "auto"             # 24 with 6 workers and 4 free parameters, 16 with 2 workers
 max_steps = 5000
 
 [parallel]

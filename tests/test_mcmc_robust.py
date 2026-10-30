@@ -31,8 +31,9 @@ EXAMPLE = os.path.join(config.CONFIG_DIR, 'lhs1140b.toml')
 # the example on the toy: 3 free parameters (eps fixed), Rp and Mp only, without solve mode; 16 walkers on 2
 # workers, no tracks; a progress line, a checkpoint and a convergence check every 10 steps
 BASE = ['model.backend="toy"', 'parallel.cache=false', 'parallel.warmup=false', 'parallel.workers=2',
-        'model.n_steps=20000', 'params.eps.vary=false', 'observables.outflow_H_fraction.use=false',
-        'observables.Mdot_HHe.use=false', 'solve.param=""', 'sampler.init="prescan"', 'sampler.reset_stuck_at=0',
+        'model.n_steps=20000', 'params.eps.vary=false', 'params.albedo.vary=false',
+        'observables.outflow_H_fraction.use=false', 'observables.Mdot_HHe.use=false', 'solve.param=""',
+        'sampler.init="prescan"', 'sampler.reset_stuck_at=0',
         'sampler.nwalkers=16', 'sampler.tracks=0', 'sampler.print_every=10', 'sampler.checkpoint_every=10',
         'sampler.check_every=10']
 
@@ -61,6 +62,7 @@ def toy_file(tmp_path, name = 'toy', **sampler_options):
     raw.update(name = name, output_root = str(tmp_path))
     raw['model'].update(backend = 'toy', n_steps = 20000)
     raw['params']['eps'] = {'value': 0.15}
+    raw['params']['albedo'] = {'value': 0.0} # fixed (the example samples it)
     raw['observables']['outflow_H_fraction']['use'] = raw['observables']['Mdot_HHe']['use'] = False
     raw['solve'] = {'param': ''}
     raw['parallel'] = {'workers': 2, 'cache': False, 'warmup': False}

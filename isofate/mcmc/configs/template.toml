@@ -109,17 +109,20 @@ value = 0.0
 [params.t_sat]                # XUV saturation time [yr], > 0; about 5e8 for an M1 star, 5e7 for a G star
 value = 5e8
 
-[params.t_pms]                # end of the pre-main-sequence XUV boost [yr]; <= t0 switches it off
+[params.t_pms]                # end of the pre-main-sequence XUV boost [yr]; 0 (default), or anything <= t0: no boost
 value = 0.0
 
-[params.pms_factor]           # XUV boost factor at t0, falling as a power law to 1 at t_pms, > 0; ~1e2 for
-value = 100.0                 # mid-to-late M stars (Ramirez & Kaltenegger 2014)
+[params.pms_factor]           # XUV boost factor at t0, falling as a power law to 1 at t_pms; 0 (default): no boost.
+value = 0.0                   # Must be > 0 when t_pms > t0: ~1e2 for mid-to-late M stars (Ramirez & Kaltenegger 2014)
 
 [params.beta]                 # XUV power-law index (step_fn = false); -1.23 matches the MUSCLES data
 value = -1.23
 
-[params.albedo]               # Bond albedo in [0, 1): T = EqTemp(Fp, A), with full redistribution
-value = 0.0
+[params.albedo]               # Bond albedo in [0, 1): T = EqTemp(Fp, A), with full redistribution. Free here: it
+vary = true                   # sets the temperature of the atmosphere (scale heights, diffusion, the surface
+prior = "uniform"             # temperature). [0, 0.8] spans bare rock to Venus-like clouds (Venus ~0.76, Earth 0.30)
+bounds = [0.0, 0.8]
+value = 0.0                   # the point of check
 
 # [params.Rp_fixed]           # optional, unset by default: a constant radius [R_earth] (isocalc Rp_override) instead of
 # value = 2.0                 # the evolving Lopez & Fortney radius. Setting it (fixed or free) switches model.rad_evol
@@ -152,8 +155,8 @@ use = false
 # value = 5e9
 # sigma = [1e9, 2e9]
 
-[observables.Teq]             # equilibrium temperature EqTemp(Fp, albedo) [K] (input)
-use = false
+[observables.Teq]             # equilibrium temperature EqTemp(Fp, albedo) [K] (input). A literature Teq usually
+use = false                   # assumes albedo 0, so with a free albedo leave this off unless it is a measurement
 # value = 300.0
 # sigma = 10.0
 

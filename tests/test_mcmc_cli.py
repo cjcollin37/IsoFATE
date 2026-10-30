@@ -44,7 +44,8 @@ def toy_config(tmp_path, **sampler_options):
     raw['name'] = 'toy'
     raw['output_root'] = str(tmp_path)
     raw['model'].update(backend = 'toy', n_steps = 20000)
-    raw['params']['eps'] = {'value': 0.15} # eps fixed: 3 free parameters; the outflow observables off
+    raw['params']['eps'] = {'value': 0.15} # eps and albedo fixed: 3 free parameters; the outflow observables off
+    raw['params']['albedo'] = {'value': 0.0}
     raw['observables']['outflow_H_fraction']['use'] = raw['observables']['Mdot_HHe']['use'] = False
     raw['observables']['Mdot'] = {'use': True, 'value': 2.03e5, 'sigma': [0.137, 0.121], 'space': 'log10'}
     raw['solve'] = {'param': ''} # without solve mode
@@ -135,7 +136,7 @@ def test_template(tmp_path, capsys):
     capsys.readouterr()
     assert main(['template']) == 0 # no path: printed
     assert tomllib.loads(capsys.readouterr().out)['name'] == 'my_planet'
-    assert config.load_config(path)['free'] == ['log_f_atm', 'age']
+    assert config.load_config(path)['free'] == ['log_f_atm', 'age', 'albedo']
 
 
 def test_check_toy(tmp_path, capsys):

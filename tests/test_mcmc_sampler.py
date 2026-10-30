@@ -34,7 +34,8 @@ EXAMPLE = os.path.join(config.CONFIG_DIR, 'lhs1140b.toml')
 STEPS = 30 # steps of the toy runs
 # the example reduced to the radius and mass fit (3 free parameters, prescan init, no reset): the toy has no
 # He-dominated outflow island, and these tests check the sampler, not the physics
-RP_ONLY = ['params.eps.vary=false', 'observables.outflow_H_fraction.use=false', 'observables.Mdot_HHe.use=false',
+RP_ONLY = ['params.eps.vary=false', 'params.albedo.vary=false',
+           'observables.outflow_H_fraction.use=false', 'observables.Mdot_HHe.use=false',
            'solve.param=""', 'sampler.init="prescan"', 'sampler.reset_stuck_at=0']
 # toy at n_steps = 2e4: its resolution bias (1e3/n_steps) still lets Rp match the data near the centre
 BASE = ['model.backend="toy"', 'parallel.cache=false', 'parallel.warmup=false', 'parallel.workers=2',

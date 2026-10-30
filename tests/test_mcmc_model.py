@@ -31,7 +31,8 @@ COMPOSITION = ('H_He', 'C_O', 'D_H', 'mmw', 'T_surf') + tuple(f'VMR_{mol}' for m
 
 
 # the example reduced to the radius and mass fit of 3 free parameters (log_f_atm, Mp, age)
-RP_ONLY = ['params.eps.vary=false', 'observables.outflow_H_fraction.use=false', 'observables.Mdot_HHe.use=false',
+RP_ONLY = ['params.eps.vary=false', 'params.albedo.vary=false',
+           'observables.outflow_H_fraction.use=false', 'observables.Mdot_HHe.use=false',
            'solve.param=""', 'sampler.init="prescan"', 'sampler.reset_stuck_at=0'] # without solve mode
 
 
@@ -83,7 +84,7 @@ def test_legacy_composition_reproduces_common():
     Checks that the legacy composition reproduces, bit for bit, the initial inventories of the recipe of
     isofate_MCMC.py (LEGACY_REFERENCE), and that the other isocalc arguments are the ones that script passes.
     '''
-    cfg = example(backend = 'isocalc')
+    cfg = example('params.t_pms=1e8', 'params.pms_factor=100', backend = 'isocalc') # that script's PMS boost
     for (log_f_atm, log_O), ref in LEGACY_REFERENCE.items():
         params = prm.theta_to_params([log_f_atm, 5.6, 5e9], cfg)
         params['log_OtoH_enhancement'] = log_O
@@ -504,3 +505,16 @@ def test_toy_has_the_keys_of_isocalc(real):
         assert list(fake) == list(res['sol']), key
         assert list(fake['atmodeller_final']) == list(res['sol']['atmodeller_final']), key
         assert all(fake[k].shape == res['sol'][k].shape for k in fake if k != 'atmodeller_final')
+
+
+def test_albedo_sets_the_temperature():
+    '''
+    Checks that the Bond albedo reaches isocalc as T = EqTemp(Fp, A) = Teq(A = 0)*(1 - A)^(1/4) [K], and the input
+    observable Teq with it: 225.6 K for LHS 1140 b at A = 0, 189.7 K at A = 0.5.
+    '''
+    cfg = example()
+    for A in (0.0, 0.5):
+        params = dict(prm.theta_to_params(CENTRE, cfg), albedo = A)
+        args, kwargs = model.planet_inputs(params, cfg)
+        assert args[5] == pytest.approx(EqTemp(cfg['planet']['Fp'], A = A), rel = 1e-14) # T [K]
+        assert args[5] == pytest.approx(225.6134*(1 - A)**0.25, rel = 1e-6)

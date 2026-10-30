@@ -33,7 +33,8 @@ from isofate.mcmc.__main__ import main
 EXAMPLE = os.path.join(config.CONFIG_DIR, 'lhs1140b.toml')
 # the example on the toy at 2e4 steps, on 2 workers
 TOY = ['model.backend="toy"', 'parallel.cache=false', 'parallel.warmup=false', 'model.n_steps=20000',
-       'parallel.workers=2']
+       'parallel.workers=2',
+       'params.albedo.vary=false'] # albedo fixed at 0 (the example samples it; test_free_albedo samples it)
 # the example reduced to Rp and Mp, solved on Rp (3 free parameters: log_f_atm, Mp, age)
 RP = ['params.eps.vary=false', 'observables.outflow_H_fraction.use=false', 'observables.Mdot_HHe.use=false',
       'solve.observable="Rp"', 'sampler.reset_stuck_at=0']
@@ -801,6 +802,7 @@ def toy_file(tmp_path, name = 'toy', solve_on = True, **sampler_options):
     raw['output_root'] = str(tmp_path)
     raw['model'].update(backend = 'toy', n_steps = 20000)
     raw['params']['eps'] = {'value': 0.15}
+    raw['params']['albedo'] = {'value': 0.0} # fixed (the example samples it)
     raw['observables']['outflow_H_fraction']['use'] = raw['observables']['Mdot_HHe']['use'] = False
     raw['solve'] = {'param': 'log_f_atm' if solve_on else '', 'observable': 'Rp'}
     raw['parallel'] = {'workers': 2, 'cache': False, 'warmup': False}
@@ -978,14 +980,34 @@ def test_real_solve_lhs1140b(tmp_path):
     '''
     Checks one real solve on the outflow H fraction of LHS 1140 b at n_steps = 2000, in this process: log_f_atm*
     near -3, log10 x within solve.tol of u, and a finite log_jac below -3, since dT/dlog_f_atm is of order 100 or
-    more on this steep ridge. At most 41 model runs, one of them the forward derivative, and an H/He wind.
+    more on this steep ridge. At most 41 model runs, one of them the forward derivative, and an H/He wind. The
+    example's fifth coordinate is the free albedo, here at 0.
     '''
     cfg = config.load_config(EXAMPLE, ['model.n_steps=2000', 'model.n_atmodeller=20', 'parallel.cache=false',
                                        'parallel.warmup=false', f'output_root="{tmp_path}"'])
     u = math.log10(0.00115) # at the datum
-    res = solve.evaluate([u, 5.6, 7.6e9, 0.15], cfg, history = True)
+    res = solve.evaluate([u, 5.6, 7.6e9, 0.15, 0.0], cfg, history = True) # (u, Mp, age, eps, albedo)
     assert res['status'] == model.OK and -3.2 < res['solve_value'] < -2.8
     assert abs(math.log10(res['obs']['outflow_H_fraction']) - u) <= 0.01*0.261
     assert math.isfinite(res['log_jac']) and res['log_jac'] < -3 # dT/dlog_f_atm of order 100 or more
     assert res['solve_evals'] <= 41 and len(res['history']) == res['solve_evals'] - 1 # the forward derivative
     assert res['obs']['Mdot_HHe'] >= 0.5*res['obs']['Mdot'] # an H/He wind
+
+
+def test_free_albedo(tmp_path):
+    '''
+    Checks a short solve-mode run (on Rp) with the albedo free, as in the example config: albedo is a coordinate of
+    the sampler, its samples stay inside the prior [0, 0.8], and each walker's Teq blob is EqTemp(Fp, A) of its own
+    albedo.
+    '''
+    cfg = toy_cfg(tmp_path, 'params.albedo.vary=true', 'sampler.nwalkers=16', 'sampler.max_steps=6',
+                  'sampler.tracks=0', 'sampler.print_every=10', 'sampler.check_every=10')
+    assert cfg['free'] == ['log_f_atm', 'Mp', 'age', 'albedo'] and cfg['sampled'] == ['u_Rp', 'Mp', 'age', 'albedo']
+    run = sampler.load_run(sampler.run_mcmc(cfg, workers = 2, make_plots = False))
+    chain, blobs = run['chain'], run['blobs']
+    assert chain.shape == (6, 16, 4)
+    A = chain[..., 3]
+    assert (A >= 0).all() and (A <= 0.8).all() and np.ptp(A) > 0.1 # spread over the prior
+    ok = blobs['status'] == model.OK
+    teq = blobs['Teq'][ok]
+    assert np.allclose(teq, 225.6134*(1 - A[ok])**0.25, rtol = 1e-6) # the Teq of each walker's albedo

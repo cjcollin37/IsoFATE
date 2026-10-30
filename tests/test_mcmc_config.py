@@ -112,7 +112,8 @@ def test_example_configs():
     '''
     template = config.load_config(config.TEMPLATE)
     assert template['warnings'] == []
-    assert template['free'] == ['log_f_atm', 'age']
+    assert template['free'] == ['log_f_atm', 'age', 'albedo']
+    assert template['params']['albedo']['bounds'] == [0.0, 0.8] and template['params']['pms_factor']['value'] == 0.0
     cfg = config.load_config(os.path.join(config.CONFIG_DIR, 'lhs1140b.toml'))
     # the age prior starts at t_sat, so the step-function warning is silent
     assert cfg['warnings'] == [] and cfg['notes'] == []
@@ -123,11 +124,12 @@ def test_example_configs():
     assert '0.41% of the age prior' in sliver['warnings'][0] and '(3.46x)' in sliver['warnings'][0]
     assert config.load_config(os.path.join(config.CONFIG_DIR, 'lhs1140b.toml'), ['model.step_fn=false',
                               'params.age.bounds=[3.1e9, 1e10]'])['warnings'] == [] # no drop without step_fn
-    assert cfg['free'] == ['log_f_atm', 'Mp', 'age', 'eps']
+    assert cfg['free'] == ['log_f_atm', 'Mp', 'age', 'eps', 'albedo']
     sv = cfg['solve'] # solve mode on the outflow H fraction
     assert config.solve_on(cfg) and (sv['param'], sv['observable'], sv['index']) == ('log_f_atm',
                                                                                     'outflow_H_fraction', 0)
-    assert cfg['sampled'] == ['u_outflow_H_fraction', 'Mp', 'age', 'eps'] and sv['name'] == 'u_outflow_H_fraction'
+    assert cfg['sampled'] == ['u_outflow_H_fraction', 'Mp', 'age', 'eps', 'albedo']
+    assert sv['name'] == 'u_outflow_H_fraction'
     v = np.log10(0.00115) # the datum in its log10 space
     assert sv['bounds'] == pytest.approx([v - 6*0.261, v + 6*0.240]) and (sv['tol'], sv['max_evals']) == (0.01, 40)
     assert list(cfg['observables']) == ['Mp', 'Rp', 'Mdot_HHe', 'outflow_H_fraction']
@@ -135,7 +137,10 @@ def test_example_configs():
     assert cfg['model']['rad_evol'] and cfg['params']['Rp_fixed']['value'] is None # the radius evolves
     assert (cfg['model']['n_steps'], cfg['model']['n_atmodeller']) == (100000, 100)
     p = {name: q['value'] for name, q in cfg['params'].items()}
-    assert (p['F_final'], p['t_sat'], p['t_pms'], p['log_F0_ratio'], p['eps']) == (0.17, 3.128e9, 1e8, -3.0, 0.15)
+    assert (p['F_final'], p['t_sat'], p['log_F0_ratio'], p['eps']) == (0.17, 3.128e9, -3.0, 0.15)
+    assert (p['t_pms'], p['pms_factor']) == (0.0, 0.0) # no pre-main-sequence XUV boost
+    albedo = cfg['params']['albedo'] # free: Bond albedos of bare rock to Venus-like clouds
+    assert (albedo['prior'], albedo['bounds'], albedo['value']) == ('uniform', [0.0, 0.8], 0.0)
     assert not cfg['params']['F_final']['vary']
     assert cfg['params']['log_f_atm']['bounds'] == [-5.0, -1.3]
     assert cfg['params']['age']['bounds'] == [3.128e9, 1e10] and cfg['params']['age']['bounds'][0] == p['t_sat']
@@ -297,15 +302,15 @@ def test_allowed_edge_cases():
 def test_generic_example():
     '''
     Checks the TOI-406 b example, a planet with only a radius and a mass and no outflow constraint: no warnings,
-    log_f_atm, Mp and age free, init = "prescan" and the ratios composition. With solve.param = "log_f_atm" it
+    log_f_atm, Mp, age and albedo free, init = "prescan" and the ratios composition. With solve.param = "log_f_atm" it
     samples u_Rp in place of log_f_atm, within 6 sigma of the radius datum (1.55 +- 0.06 R_earth).
     '''
     cfg = config.load_config(os.path.join(config.CONFIG_DIR, 'toi406b.toml'))
-    assert cfg['warnings'] == [] and cfg['free'] == ['log_f_atm', 'Mp', 'age']
+    assert cfg['warnings'] == [] and cfg['free'] == ['log_f_atm', 'Mp', 'age', 'albedo']
     assert list(cfg['observables']) == ['Mp', 'Rp'] and not config.solve_on(cfg)
     assert cfg['sampler']['init'] == 'prescan' and cfg['model']['composition'] == 'ratios'
     solved = config.load_config(os.path.join(config.CONFIG_DIR, 'toi406b.toml'), ['solve.param="log_f_atm"'])
-    assert solved['sampled'] == ['u_Rp', 'Mp', 'age'] and solved['sampler']['init'] == 'solve'
+    assert solved['sampled'] == ['u_Rp', 'Mp', 'age', 'albedo'] and solved['sampler']['init'] == 'solve'
     assert solved['solve']['bounds'] == pytest.approx([1.55 - 6*0.06, 1.55 + 6*0.06])
 
 
@@ -589,3 +594,23 @@ def test_nwalkers_auto_rule():
         config.choose_nwalkers(cfg, 6)
     with pytest.raises(ConfigError, match = 'must be even'):
         load({'sampler.nwalkers': 2, 'params.age': {'vary': True, 'bounds': [1e9, 1e10]}})
+
+
+def test_pms_check():
+    '''
+    Checks the pre-main-sequence XUV boost: off by default (t_pms = 0 and pms_factor = 0); on with t_pms > t0 it
+    needs pms_factor > 0, since Fxuv takes log10(pms_factor) (0 makes the flux NaN), fixed or over its whole prior;
+    a pms_factor set while the boost is off gets a note.
+    '''
+    cfg = load()
+    assert (cfg['params']['t_pms']['value'], cfg['params']['pms_factor']['value']) == (0.0, 0.0)
+    assert not any('pms_factor' in note for note in cfg['notes'])
+    with pytest.raises(config.ConfigError, match = 'pms_factor can be 0'):
+        load({'params.t_pms': 1e8})
+    with pytest.raises(config.ConfigError, match = 'pms_factor can be 0'): # 0 inside its prior
+        load({'params.t_pms': 1e8, 'params.pms_factor': {'vary': True, 'bounds': [0.0, 200.0]}})
+    on = load({'params.t_pms': 1e8, 'params.pms_factor': 100.0}) # the setting of isofate_MCMC.py
+    assert on['params']['pms_factor']['value'] == 100.0 and not any('pms_factor' in n for n in on['notes'])
+    off = load({'params.pms_factor': 100.0}) # t_pms = 0: the boost is off
+    assert any('pms_factor = 100 has no effect' in note for note in off['notes'])
+    assert not any('pms_factor' in n for n in load({'params.t_pms': 5e5})['notes']) # t_pms < t0 = 1e6: off

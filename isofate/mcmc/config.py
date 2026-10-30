@@ -78,8 +78,10 @@ PARAMS = {
     'F_final': _param(0.0, 'W/m2', r'$F_{\rm final}$', (0.0, inf, False, True),
                       'XUV flux after t_sat when step_fn = true'),
     't_sat': _param(5e8, 'yr', r'$t_{\rm sat}$', (0.0, inf, True, True), 'XUV saturation time'),
-    't_pms': _param(0.0, 'yr', r'$t_{\rm pms}$', (0.0, inf, False, True), 'end of the pre-main-sequence phase'),
-    'pms_factor': _param(100.0, '', 'PMS factor', (0.0, inf, True, True), 'XUV flux boost before t_pms'),
+    't_pms': _param(0.0, 'yr', r'$t_{\rm pms}$', (0.0, inf, False, True),
+                    'end of the pre-main-sequence XUV boost (0: no boost)'),
+    'pms_factor': _param(0.0, '', 'PMS factor', (0.0, inf, False, True),
+                         'XUV boost at t0, falling to 1 at t_pms (0: none; must be > 0 when t_pms > t0)'),
     'beta': _param(-1.23, '', r'$\beta$', (-inf, inf, True, True), 'XUV power-law index (step_fn = false)'),
     'albedo': _param(0.0, '', r'$A_B$', (0.0, 1.0, False, True), 'Bond albedo, T = EqTemp(Fp, A)'),
     'Rp_fixed': _param(None, 'R_earth', r'$R_{p,\rm fixed}$', (0.0, inf, True, True),
@@ -665,6 +667,36 @@ def _xuv_step_warning(cfg, warnings):
                     'the age bound or t_sat if a saturated present-day flux is not physical')
 
 
+def _pms_check(cfg, notes):
+    '''
+    Checks the pre-main-sequence XUV boost
+    isofunks.Fxuv starts at pms_factor*F0 at t0 and falls as a power law to F0 at t_pms, so the boost is on only
+    when t_pms > t0, and then pms_factor must be > 0 (the power law takes log10(pms_factor): 0 makes the flux NaN).
+    By default both are 0, i.e. no boost.
+
+    Inputs:
+        - cfg: the cfg dict being built, with model and params [dict]
+        - notes: list a note is appended to when pms_factor is set but has no effect [list]
+    '''
+    t0, p = cfg['model']['t0'], cfg['params'] # [yr]
+
+    def extremes(name):
+        # (lowest, highest) value a parameter can take: its value when fixed, its prior support when free
+        e = p[name]
+        if not e['vary']:
+            return e['value'], e['value']
+        return tuple(e['bounds']) if e['bounds'] is not None else hard_limits(name, cfg['model'])[:2]
+    t_hi = extremes('t_pms')[1] # [yr]
+    f_lo, f_hi = extremes('pms_factor')
+    if t_hi > t0 and not f_lo > 0:
+        raise ConfigError(f'the pre-main-sequence XUV boost is on (t_pms up to {t_hi:g} yr > t0 = {t0:g} yr), but '
+                          f'pms_factor can be {f_lo:g}: it must be > 0 there (e.g. 100 for mid-to-late M dwarfs, '
+                          'Ramirez & Kaltenegger 2014), or set t_pms = 0 for no boost')
+    if t_hi <= t0 and f_hi > 0:
+        notes.append(f'pms_factor = {f_hi:g} has no effect: the pre-main-sequence XUV boost is off while t_pms <= t0 '
+                     f'({t_hi:g} yr)')
+
+
 def _sigma(value, where):
     '''
     Returns a sigma: a positive number, or a (lo, hi) tuple of positive numbers for asymmetric errors (lo applies
@@ -1168,8 +1200,9 @@ def normalize(raw, config_path = None):
     cfg['params'] = _params(raw.get('params', {}), cfg['model'], warnings)
     cfg['free'] = [name for name in PARAMS if cfg['params'][name]['vary']] # theta order: the registry order
     _xuv_step_warning(cfg, warnings)
-    cfg['observables'] = _observables(raw.get('observables', {}), cfg, warnings)
     notes = []
+    _pms_check(cfg, notes)
+    cfg['observables'] = _observables(raw.get('observables', {}), cfg, warnings)
     cfg['solve'] = _solve(raw.get('solve', {}), cfg, warnings, notes)
     cfg['sampler'] = _sampler(raw.get('sampler', {}), cfg, warnings, notes)
     cfg['parallel'] = _parallel(raw.get('parallel', {}))
