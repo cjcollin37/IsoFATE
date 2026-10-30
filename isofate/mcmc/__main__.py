@@ -437,23 +437,47 @@ def _solve_here(cfg, phys_theta, u = None):
     seconds = time.perf_counter() - start # [s]
     if res.get('history'):
         print('\n'.join(search.history_table(res['history'], st, st['observable'], u, st['tol'])))
-        # The same T at several P inside the u support: T cannot be inverted there, so that stretch gets no mass
+        # The same T at several P inside the u support: T cannot be inverted there. The plateau branch covers a
+        # plateau of stripped planets at a prior bound (solve.plateau_covered); any other gets no mass.
         flat = solve.plateau(res['history'], st, u)
         if flat:
             T, a, b, term = flat
+            if solve.plateau_covered(res['history'], st, u, flat):
+                what = (f"the plateau branch (solve.plateau) samples that stretch of {st['param']} through the u "
+                        'that have no root')
+            elif st['plateau']: # e.g. x = 1 of planets that keep an atmosphere
+                what = (f"it is not one of planets stripped at a bound of {st['param']}'s prior, which the plateau "
+                        f"branch covers, so solve mode leaves out the posterior mass of that stretch of {st['param']}; "
+                        'if the term is not far below the best fit, sample without solve mode')
+            else:
+                what = (f"with solve.plateau = false solve mode leaves out the posterior mass of that stretch of "
+                        f"{st['param']}; if the term is not far below the best fit, set solve.plateau = true or "
+                        'sample without solve mode')
             print(f"  note: a plateau: {st['observable']} gives T = {T:.6g} at every {st['param']} evaluated from "
                   f"{a:.6g} to {b:.6g} (e.g. the bare-core radius of a stripped planet), inside the u support, where "
-                  f"its term is {term:.3g}. T cannot be inverted there, so solve mode leaves out the posterior mass "
-                  f"of that stretch of {st['param']}; if the term is not far below the best fit, sample without "
-                  'solve mode (see "Solve mode" in the README)')
+                  f"its term is {term:.3g}. T cannot be inverted there: {what} (see \"Solve mode\" in the README)")
+        if 'plateau' in res: # this u has no root and a bound is stripped: the plateau branch's point
+            pl, P_m = res['plateau'], res['plateau']['P']
+            stretches = ' and '.join(f'{min(a, b):.6g} to {max(a, b):.6g}' for a, b in pl['stretches'] if a != b)
+            if res['status'] in (model.OK, model.NO_LIKELIHOOD):
+                fate = 'stripped, on the plateau, so it counts'
+            elif res['status'] == model.OUTSIDE_PRIOR:
+                fate = 'not on the plateau, so it has a root of its own and counts there'
+            else:
+                fate = 'where the model run failed (below)'
+            print(f"  plateau branch: no root; the u without a root ({stretches}) map linearly onto the prior of "
+                  f"{st['param']} (|d{st['param']}/du| = {pl['jac']:.5g}), the plateau at T = {pl['T']:.6g}: "
+                  f"{st['param']} = {P_m:.6g}, {fate}")
     status = int(res['status'])
     done = f"{res['solve_evals']} model runs, {seconds:.1f} s, isocalc {res['runtime']:.3g} s"
     if status in (model.OK, model.NO_LIKELIHOOD) and math.isfinite(res['solve_value']):
-        # log_jac = ln|dP*/du| = -ln|dT/dP|, so |dT/dP| = exp(-log_jac)
+        # log_jac = ln|dP*/du| = -ln|dT/dP|, so |dT/dP| = exp(-log_jac); the plateau branch's is its map's
+        slope = ('the plateau branch\'s map' if 'plateau' in res else
+                 f"dT/d{st['param']} = {math.exp(-res['log_jac']) if math.isfinite(res['log_jac']) else math.nan:.5g}")
         print(f"solved: {st['param']}* = {res['solve_value']:.7g}, ln|d{st['param']}*/du| = {res['log_jac']:.6g} "
-              f"(dT/d{st['param']} = {math.exp(-res['log_jac']) if math.isfinite(res['log_jac']) else math.nan:.5g}), "
-              f"{done}; lp = log_prior + log_jac + log_like = {res['log_prior']:.5g} + {res['log_jac']:.5g} + "
-              f"{res['log_like']:.5g} = {res['lp']:.6g}" + (f"; {res['error']}" if res['error'] else ''))
+              f"({slope}), {done}; lp = log_prior + log_jac + log_like = {res['log_prior']:.5g} + "
+              f"{res['log_jac']:.5g} + {res['log_like']:.5g} = {res['lp']:.6g}"
+              + (f"; {res['error']}" if res['error'] else ''))
         print(sampler.comparison_text(res['obs'], res['terms'], cfg))
         return res, status == model.OK # status 3: a root, but lp = -inf (the data, or an unusable derivative)
     print(f"no solve: status {status} ({model.STATUS_NAMES.get(status, '?')}): {res['error']} ({done})")
@@ -896,8 +920,8 @@ def make_parser():
     p.add_argument('--points', type = int, help = 'number of test points (default resolution.points)')
     p.add_argument('--source', metavar = 'S', help = 'test points: auto (default: solve in solve mode, bisect when '
                                                      'sampler.init = "bisect", else prescan), solve, prescan, prior, '
-                                                     'bisect, or chain:RUN_DIR (posterior samples of a run: use 30 '
-                                                     'or more points, so that its tails are represented)')
+                                                     'bisect, or chain:RUN_DIR (posterior draws of a run, which '
+                                                     'adds the posterior test: use 100 or more points)')
     p.add_argument('--workers', type = int, help = 'worker processes (default parallel.workers, capped by memory)')
     p.add_argument('--tol', type = float, help = 'pass when every observable is within tol sigma (default 0.1)')
     p.add_argument('--out', metavar = 'DIR',

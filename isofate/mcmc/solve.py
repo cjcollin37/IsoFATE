@@ -31,12 +31,29 @@ its length in u instead of in P.
   solve.range_sigma (6): the truncation removes only points whose O term is below -k^2/2 = -18 (e^-18 of the
   likelihood). It also keeps the sampler off the plateaus where T cannot be inverted that lie outside it, e.g.
   x = 1 (He not escaping) or the 1e-15 floor of the outflow H fraction. A plateau inside it (Rp = the bare core of
-  a stripped planet) has no u of its own, so its posterior mass is left out (plateau() finds one in a search). A
-  limit uses [v - k s, v] (upper) or [v, v + k s] (lower), with a warning: solve mode is meant for detections.
+  a stripped planet) has no u of its own; the plateau branch below gives it one (plateau() finds a plateau in a
+  search). A limit uses [v - k s, v] (upper) or [v, v + k s] (lower), with a warning: solve mode is meant for
+  detections.
 - No root in P's prior support for (u, phi): lp = -inf, status 1 ("outside prior: no P in its prior gives this
   u"). One root per bracket is assumed (the density would otherwise be a sum over roots); `scan` reports
   non-monotonic stretches of O(P) inside the u range so that this can be checked.
 - The blobs' log_prior is the prior of the physical point (P*, phi); lp = log_prior + log_jac + log_like.
+
+The plateau branch (solve.plateau, default true). A planet stripped at a prior bound P_s of P has the same T = T_s
+over the whole stretch of P that strips it, e.g. Rp = the bare-core radius for every log_f_atm below the stripping
+edge. No u stands for that stretch, so without the branch its posterior mass is left out: on TOI-406 b, 82% of the
+plain posterior. The u beyond the range of T have no root either. The branch maps them linearly onto P's prior
+(plateau_map), with the constant Jacobian |dP/du| = |P_o - P_s|/L: first the u beyond T_s (Rp below the bare
+core), across the jump of T at the stripping edge from the planets that keep an atmosphere, then the u beyond T_o,
+the T at the other bound P_o (usually outside the u support). L is their total length, each starting the search's
+convergence margin away from its T. The model runs at that P, and the point counts only when the planet is
+stripped there with T = T_s, on the plateau: any other P has a root of its own, which counts it already. So each P
+of the prior is reached once, and the posterior over (P, phi) stays unchanged. A plateau whose T lies outside the
+u support gets nothing, like any model value there. It costs one model run more than a u without a root (two when
+the search did not evaluate both bounds). The table leaves those points out (table_values), since their P is not
+a root. A config saved before the option existed gets false: a resumed chain keeps the density it was sampled
+with. Walkers cross between the stripped planets and the others only through moves that land in the other stretch
+of u, which tau does not see: the summary counts the crossings (sampler.write_summary).
 
 Warm start. After init = "solve" the parent fits a table of P* over the sampler's coordinates and writes it to
 <run_dir>/solve_table.npz before the first step: a local linear regression on the k nearest solved points in the
@@ -77,6 +94,7 @@ EVALS_GUESS = 15 # model runs per cold solve, for cost estimates before any was 
 MAX_TABLE_POINTS = 5000 # a refitted table keeps at most this many solved points (the most recent)
 NO_TABLE = -1 # table_version of a checkpoint written while the run had no table yet (init other than "solve")
 OLD_DERIVATIVE = 'central' # the scheme of configs saved before solve.derivative existed
+PLATEAU_EQUAL = 1e-9 # values of T within this many sigma are the same, on a plateau
 
 _TABLES = {} # path -> (file signature, table), the worker's lazily loaded warm-start tables
 
@@ -105,13 +123,15 @@ def settings(cfg):
         - warm_start: solve.warm_start [Bool]
         - h: the finite-difference step of dT/dP, 1e-5 of P's prior width [unit of P]
         - derivative: "forward" or "central" [str]
+        - plateau: solve.plateau, the plateau branch; False for a config saved before the option existed, the
+          density it was sampled with [Bool]
     '''
     sv = cfg['solve']
     st = search.bracket(cfg, sv['param'])
     st.update(observable = sv['observable'], ocfg = cfg['observables'][sv['observable']], name = sv['name'],
               bounds = tuple(sv['bounds']), tol = float(sv['tol']), max_evals = int(sv['max_evals']),
               warm_start = bool(sv['warm_start']), h = DERIVATIVE_STEP*(st['hi'] - st['lo']), # in P, not ln P
-              derivative = sv.get('derivative', OLD_DERIVATIVE))
+              derivative = sv.get('derivative', OLD_DERIVATIVE), plateau = bool(sv.get('plateau', False)))
     return st
 
 
@@ -234,13 +254,134 @@ def _derivative(run, point, st, root, u):
     return deriv, n, None
 
 
+def plateau_map(u, bounds, lo, hi, T_lo, T_hi, stripped_lo, stripped_hi, margins = (0.0, 0.0)):
+    '''
+    Returns the point of P's prior that the plateau branch gives a u without a root, and |dP/du| there
+    A planet stripped at a prior bound P_s of P has T = T_s there and over the whole stretch of P that strips it
+    (e.g. Rp = the bare core for every log_f_atm below the stripping edge): a plateau, which no u stands for. The
+    u beyond the range of T have no root either. Two stretches of them serve the plateau, in this order: the u
+    beyond T_s (Rp below the bare core), then those beyond T_o, T at the other bound P_o (above it when T rises
+    away from the plateau), each from its end next to T to the edge of the u support. Together they have length L,
+    and the distance d of u into them, counted through the first and on into the second, maps linearly onto P's
+    prior:
+
+        P = P_s + (d/L) (P_o - P_s),    |dP/du| = |P_o - P_s|/L
+
+    So the stripped planets lie next to T_s, usually the end nearest the datum (where the solve init draws u), and
+    across the jump of T at the stripping edge from the planets that keep an atmosphere. The second stretch only
+    adds room when the first is short; usually T_o lies beyond the u support and it is empty. Only the P that are
+    stripped belong to the plateau (the others have roots of their own), and the caller keeps only those on the
+    plateau (stripped, with T = T_s). With both bounds stripped, and the same T at both, the u below and above the
+    plateau map onto the whole prior. Each stretch starts a margin away from its T: a u that close converges at
+    that bound in the search instead (search.within: tol sigma, sigma on that side of u). So each P of the prior is
+    reached once, as a root or here, and the posterior over (P, phi) is unchanged. A plateau whose T lies outside
+    the u support gets no point, as any model value outside it: its likelihood term is below -range_sigma^2/2 for a
+    detection.
+
+    Inputs:
+        - u: the sampled value of T [T units]
+        - bounds: the u support (u_lo, u_hi) [T units]
+        - lo, hi: P's prior bounds [unit of P]
+        - T_lo, T_hi: T at them; NaN where undefined or where the model did not run [T units]
+        - stripped_lo, stripped_hi: whether the planet loses its atmosphere there [Bool]
+        - margins: (above, below), the search's convergence margins for a u below and above a bound's T [T units]
+
+    Output: (P, jac, T_s, stretches), or None when u is in neither stretch
+        - P: the point [unit of P]
+        - jac: |dP/du| [unit of P per T unit]
+        - T_s: T on the plateau [T units]
+        - stretches: the two stretches, each as (end next to T, edge of the support), in the order of d [T units]
+    '''
+    u_lo, u_hi = bounds
+    above, below = margins
+    if not (stripped_lo or stripped_hi) or not (math.isfinite(T_lo) and math.isfinite(T_hi)):
+        return None
+    T_s = T_lo if stripped_lo else T_hi
+    if not u_lo <= T_s <= u_hi or (stripped_lo and stripped_hi and T_lo != T_hi): # outside the support, or no plateau
+        return None
+
+    def clip(x):
+        '''
+        x clipped to the u support
+        '''
+        return min(max(x, u_lo), u_hi)
+
+    if stripped_lo and stripped_hi: # stripped everywhere: the u below and above the plateau, onto the whole prior
+        P_s, P_o = lo, hi
+        stretches = ((clip(T_s - above), u_lo), (clip(T_s + below), u_hi))
+    else:
+        P_s, P_o, T_o = (lo, hi, T_hi) if stripped_lo else (hi, lo, T_lo)
+        if T_o == T_s:
+            return None
+        if T_o > T_s: # T rises away from the plateau: the u below T_s, then those above T_o
+            stretches = ((clip(T_s - above), u_lo), (clip(T_o + below), u_hi))
+        else: # T falls away from it: the u above T_s, then those below T_o
+            stretches = ((clip(T_s + below), u_hi), (clip(T_o - above), u_lo))
+    lengths = [abs(edge - start) for start, edge in stretches]
+    total = sum(lengths)
+    if not total > 0:
+        return None
+    for (start, edge), offset in zip(stretches, (0.0, lengths[0])):
+        sign = 1.0 if edge >= start else -1.0
+        d = sign*(u - start) # into the stretch, from its end next to T; the edge of the support is part of it
+        if 0 < d <= sign*(edge - start):
+            return P_s + (offset + d)/total*(P_o - P_s), abs(P_o - P_s)/total, T_s, stretches
+    return None
+
+
+def _plateau_branch(run, start, st, u, hist):
+    '''
+    Runs the plateau branch of an evaluation whose search found no root (g of one sign at both bounds)
+    T and whether the planet is stripped at each prior bound come from the search's history, or from a run there
+    when the search did not evaluate it; plateau_map gives the point, and one more run evaluates it.
+
+    Inputs:
+        - run: point -> (g, ran, result), g = T - u [function]
+        - start: the physical theta, P to be set [array]
+        - st: solve settings (index, lo, hi, bounds) [dict]
+        - u: the sampled value of T [T units]
+        - hist: the search's (phase, x, g, result) entries [list]
+
+    Output: (mapped, entries)
+        - mapped: (P, jac, T_s, stretches, T at P, result at P), or None when u has no point on a plateau [tuple]
+        - entries: the branch's runs as ('plateau', x, g, result) history entries [list]
+    '''
+    entries, ends = [], []
+    for x in (st['lo'], st['hi']):
+        seen = [(g, r) for _, xh, g, r in hist if xh == x] # the search evaluates the bounds exactly
+        if seen:
+            g, r = seen[-1]
+        else:
+            point = start.copy()
+            point[st['index']] = x
+            g, _, r = run(point)
+            entries.append(('plateau', x, g, r))
+        ran = r['status'] in search.RAN
+        ends.append((g + u if ran else nan, ran and r['obs'].get('exhausted') == 1))
+    (T_lo, stripped_lo), (T_hi, stripped_hi) = ends
+    # a u this close to a bound's T converges there in the search, so the stretches start that far from it
+    margins = tuple(st['tol']*likelihood.sigma_eff(st['ocfg'], above = side) for side in (True, False))
+    mapped = plateau_map(u, st['bounds'], st['lo'], st['hi'], T_lo, T_hi, stripped_lo, stripped_hi, margins)
+    if mapped is None:
+        return None, entries
+    P, jac, T_s, stretches = mapped
+    point = start.copy()
+    point[st['index']] = P
+    g, _, r = run(point)
+    entries.append(('plateau', P, g, r))
+    return (P, jac, T_s, stretches, g + u, r), entries
+
+
 def evaluate(theta, cfg, n_steps = None, n_atmodeller = None, table = None, history = False):
     '''
     Runs one solve-mode evaluation at a sampler theta: the root, the Jacobian and the model at the root
     The sampler theta holds u in place of solve.param (see the module docstring). A theta outside the prior (u
     outside its support included) is rejected before any model run, and so is one that the input observables
     rule out, when P is not an input parameter. Then P* is solved for, dT/dP is taken there, and
-    lp = log_prior + log_jac + log_like.
+    lp = log_prior + log_jac + log_like. With solve.plateau, a u without a root (g of one sign at both prior
+    bounds) gets the P of plateau_map instead, with log_jac = ln|dP/du| of the map, when a bound is stripped. The
+    point counts when the planet there is stripped with T = T_s, on the plateau; any other P has a root of its own,
+    so the point is outside the support (status 1).
 
     Inputs:
         - theta: a sampler theta (ndim,) [array]
@@ -261,7 +402,9 @@ def evaluate(theta, cfg, n_steps = None, n_atmodeller = None, table = None, hist
         - solve_evals: model runs, the derivative's included [int]
         - log_jac: ln|dP*/du|; NaN without a usable derivative
         - runtime: isocalc time of all the runs [s]
-        - history: the search's (phase, x, g, result) entries; only with history = True [list]
+        - history: the search's (phase, x, g, result) entries, the plateau branch's last; only with
+          history = True [list]
+        - plateau: with the plateau branch only: its two stretches of u, T_s, the point P and |dP/du| [dict]
     '''
     st = settings(cfg)
     theta = np.atleast_1d(np.asarray(theta, dtype = float))
@@ -295,6 +438,36 @@ def evaluate(theta, cfg, n_steps = None, n_atmodeller = None, table = None, hist
     if history:
         res['history'] = hist
     P, name = st['param'], st['name']
+    if root.outcome in (search.ABOVE, search.BELOW) and st['plateau']: # a u beyond a plateau of T?
+        mapped, entries = _plateau_branch(run, start, st, u, hist)
+        hist, n_evals = hist + entries, n_evals + len(entries)
+        if history:
+            res['history'] = hist
+        if mapped is not None:
+            P_m, jac, T_s, stretches, T_m, r = mapped
+            res.update(runtime = runtime[0], solve_evals = n_evals,
+                       plateau = {'stretches': stretches, 'T': T_s, 'P': P_m, 'jac': jac})
+            if r['status'] not in search.RAN:
+                return dict(res, status = r['status'], error = f"the model failed in the plateau branch of {P} "
+                                                                 f"(at {P} = {P_m:.6g}): {r['error']}")
+            # on the plateau: stripped, with T = T_s (to PLATEAU_EQUAL sigma); any other P has a root of its own
+            flat = abs(T_m - T_s) <= PLATEAU_EQUAL*likelihood.sigma_eff(st['ocfg'])
+            if r['obs'].get('exhausted') != 1 or not flat:
+                why = ('keeps its atmosphere' if r['obs'].get('exhausted') != 1 else
+                       f'is stripped but not on the plateau (T = {T_m:.6g}, the plateau {T_s:.6g})')
+                return dict(res, status = model.OUTSIDE_PRIOR,
+                            error = f'outside prior: no {P} in its prior gives {name} = {u:.6g} '
+                                    f"({search.OUTCOMES[root.outcome]}), and the plateau branch's {P} = "
+                                    f'{P_m:.6g} {why}')
+            # the stripped planet at P_m, with the Jacobian of the linear map
+            out = dict(r, runtime = runtime[0], solve_value = P_m, solve_evals = n_evals, log_jac = math.log(jac),
+                       plateau = res['plateau'])
+            if history:
+                out['history'] = hist
+            lp = r['log_prior'] + out['log_jac'] + r['log_like']
+            if r['status'] == model.OK and math.isfinite(lp):
+                return dict(out, status = model.OK, lp = lp)
+            return dict(out, status = model.NO_LIKELIHOOD, lp = -inf)
     if root.outcome != search.CONVERGED:
         res.update(runtime = runtime[0], solve_evals = n_evals)
         if root.outcome in search.NO_ROOT: # no P in its prior gives u: (u, phi) is outside the support
@@ -331,9 +504,10 @@ def plateau(history, st, u):
     '''
     Finds a plateau of the solve observable among the evaluations of one search
     A plateau is the widest set of at least two evaluations at different P whose model ran and gave the same
-    finite T (within 1e-9 sigma), inside the u support. Example: Rp = the bare-core radius for every log_f_atm
-    that strips the planet. T cannot be inverted there, so solve mode leaves out the posterior mass of a plateau
-    (it is a single u value). check in solve mode prints it.
+    finite T (within PLATEAU_EQUAL sigma), inside the u support. Example: Rp = the bare-core radius for every
+    log_f_atm that strips the planet. T cannot be inverted there: the plateau branch samples a plateau of planets
+    stripped at a prior bound (plateau_covered), and any other plateau's posterior mass is left out (it is a single
+    u value). check in solve mode prints it.
 
     Inputs:
         - history: search.find_root's (phase, x, g, result) entries, g = T - u [list]
@@ -351,7 +525,7 @@ def plateau(history, st, u):
     best, i = None, 0
     while i < len(ran): # groups of equal T: each run within 1e-9 sigma of the group's first
         j = i
-        while j + 1 < len(ran) and ran[j + 1][0] - ran[i][0] <= 1e-9*s:
+        while j + 1 < len(ran) and ran[j + 1][0] - ran[i][0] <= PLATEAU_EQUAL*s:
             j += 1
         xs = [x for _, x, _ in ran[i:j + 1]]
         T = ran[i][0] + u
@@ -361,6 +535,28 @@ def plateau(history, st, u):
             best = (T, min(xs), max(xs), float(ran[i][2].get('terms', {}).get(st['observable'], nan)))
         i = j + 1
     return best
+
+
+def plateau_covered(history, st, u, flat):
+    '''
+    Returns whether the plateau branch covers a plateau that plateau() found in a search: the branch is on, every
+    run on the plateau lost its atmosphere, and the plateau reaches a prior bound of P
+
+    Inputs:
+        - history: search.find_root's (phase, x, g, result) entries, g = T - u [list]
+        - st: solve settings (ocfg, lo, hi, plateau) [dict]
+        - u: the sampled value of T in that search [T units]
+        - flat: what plateau() returned for that history [tuple or None]
+
+    Output: True when covered [Bool]
+    '''
+    if flat is None or not st.get('plateau', False):
+        return False
+    T, a, b, _ = flat
+    s = likelihood.sigma_eff(st['ocfg'])
+    on = [r for _, x, g, r in history if r['status'] in search.RAN and math.isfinite(g)
+          and abs(g + u - T) <= PLATEAU_EQUAL*s] # the runs on the plateau
+    return bool(on) and all(r['obs'].get('exhausted') == 1 for r in on) and (a == st['lo'] or b == st['hi'])
 
 
 ###_____The warm-start table_____###
@@ -611,14 +807,39 @@ def worker_table(cfg):
     return cached[1]
 
 
+def table_values(cfg, thetas, blobs):
+    '''
+    Returns the solved values that the warm-start table may learn from: solve_value, NaN at the points of the
+    plateau branch, whose P is not a root of T = u and would spoil the local fits next to the roots
+    Those are stripped and have T farther from u than the solve's tolerance; a root, stripped or not, never does,
+    so a run without the branch keeps every point it had.
+
+    Inputs:
+        - cfg: resolved config in solve mode [dict]
+        - thetas: the sampler coordinates of the points (n, ndim) [array]
+        - blobs: their blobs (n,) [structured array]
+
+    Output: their P*, NaN where not solved or from the plateau branch [array]
+    '''
+    st = settings(cfg)
+    values = np.array(blobs['solve_value'], dtype = float)
+    u = np.asarray(thetas, dtype = float).reshape(len(values), -1)[:, st['index']]
+    above, below = (likelihood.sigma_eff(st['ocfg'], above = side) for side in (True, False))
+    with np.errstate(invalid = 'ignore'): # NaN where undefined: not the branch's
+        g = search.g_of(blobs, st['observable'], st['ocfg'], 0.0) - u # T - u
+        branch = (np.asarray(blobs['exhausted']) == 1) & (np.abs(g) > st['tol']*np.where(g > 0, above, below))
+    return np.where(branch, nan, values)
+
+
 def build_table(cfg, run_dir, chain = None, blobs = None):
     '''
     Fits the warm-start table to the initialization's solves plus the chain's solved states (a refit)
     Takes the draws of <run_dir>/solve_init.npz and the distinct solved states of chain (status 0, finite
-    solve_value and log_jac), in the order init, then by step and walker, and keeps the last MAX_TABLE_POINTS. A
-    walker that stays put repeats its state, and only its first appearance counts. Deterministic: the same inputs
-    give the same table. Without chain: the table of the initialization (init_solve's). Without solve_init.npz
-    (an initialization other than init = "solve"): the chain alone.
+    solve_value and log_jac, not from the plateau branch: table_values), in the order init, then by step and
+    walker, and keeps the last MAX_TABLE_POINTS. A walker that stays put repeats its state, and only its first
+    appearance counts. Deterministic: the same inputs give the same table. Without chain: the table of the
+    initialization (init_solve's). Without solve_init.npz (an initialization other than init = "solve"): the chain
+    alone.
 
     Inputs:
         - cfg: resolved config in solve mode [dict]
@@ -633,13 +854,13 @@ def build_table(cfg, run_dir, chain = None, blobs = None):
     if os.path.exists(path): # init = "solve": every draw, solved or not (fit_table leaves out the unsolved)
         with np.load(path, allow_pickle = False) as d:
             thetas, b = d['theta'], d['blobs']
-            values, log_jac = b['solve_value'], b['log_jac']
+            values, log_jac = table_values(cfg, thetas, b), b['log_jac']
     else: # an initialization other than init = "solve": the chain alone
         thetas, values, log_jac = np.empty((0, ndim)), np.empty(0), np.empty(0)
     if chain is not None and len(chain):
         X = np.asarray(chain, dtype = float).reshape(-1, ndim) # by step, then walker
         B = np.asarray(blobs).reshape(-1)
-        ok = (B['status'] == model.OK) & np.isfinite(B['solve_value']) & np.isfinite(B['log_jac']) # solved states
+        ok = (B['status'] == model.OK) & np.isfinite(table_values(cfg, X, B)) & np.isfinite(B['log_jac']) # solved
         thetas = np.concatenate([thetas, X[ok]])
         values = np.concatenate([values, B['solve_value'][ok]])
         log_jac = np.concatenate([log_jac, B['log_jac'][ok]])

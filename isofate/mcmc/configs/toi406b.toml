@@ -6,8 +6,9 @@
 #
 # Sample it without solve mode. With sigma = 0.06 R_earth the radius ridge is wide enough for plain sampling, and
 # the bare core of a stripped planet (1.46 R_earth at 4.57 M_earth) also fits the radius: 82% of the plain
-# posterior was stripped. Solve mode on Rp (--set 'solve.param="log_f_atm"') cannot sample that plateau and
-# returns only the planets that keep an atmosphere (the config then warns; see "Solve mode" in the README).
+# posterior was stripped. Solve mode on Rp (--set 'solve.param="log_f_atm"') samples those planets only through
+# its plateau branch (solve.plateau = true, the default; the config notes it), and without it (false) returns
+# only the planets that keep an atmosphere (see "Solve mode" in the README).
 # Plain sampling with 16 walkers on 2 workers mixed well: acceptance 0.20, tau 15-18 steps, 0.4 s/step.
 
 name = "toi406b"

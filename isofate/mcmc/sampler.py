@@ -75,6 +75,9 @@ STUCK_AFTER = 50 # [steps] chain length from which progress lines count stuck wa
 # the reset also replaces walkers with lp < median(lp) - RESET_DLP, and walkers that far down count as "behind":
 # a factor e^-20 (about 2e-9) in probability, so such a walker sits in another, much worse region
 RESET_DLP = 20.0
+# solve mode with the plateau branch: walkers that cross between stripped planets and those that keep an atmosphere
+# fewer times than this after the burn-in (median) leave the split between the two uncertain (a summary warning)
+PLATEAU_CROSSINGS = 20
 PERCENTILES = (2.5, 16, 50, 84, 97.5) # the median and the 68% and 95% intervals
 TAU_WINDOW_C = 5.0 # emcee's integrated_time window factor c (M = c tau), used by tau_noise
 SAMPLER_TAU_CHECKS = config.SAMPLER_DEFAULTS['tau_checks'] # for configs saved before sampler.tau_checks existed
@@ -964,8 +967,9 @@ def init_solve(cfg, pool, nwalkers, rng, run_dir, log):
                            'solve.param')
     best = finite[np.argsort(-lp_all[finite], kind = 'stable')][:2*nwalkers]
     pick = rng.permutation(best)[:nwalkers]
-    # the table from every draw with a solved value, the ones ruled out by another observable included
-    table = solve.fit_table(cfg, thetas_all, blobs_all['solve_value'], blobs_all['log_jac'])
+    # the table from every draw with a solved value, the ones ruled out by another observable included (not the
+    # stripped points of the plateau branch: table_values)
+    table = solve.fit_table(cfg, thetas_all, solve.table_values(cfg, thetas_all, blobs_all), blobs_all['log_jac'])
     solve.save_table(table, os.path.join(run_dir, solve.TABLE))
     kind = 'warm-start table' if sv['warm_start'] else 'table (unused: solve.warm_start = false)'
     log(f'walkers start from {nwalkers} of the best {best.size} solved draws (lp {lp_all[best].max():.4g} to '
@@ -2342,7 +2346,8 @@ def write_summary(run_dir, state = 'finished'):
     The posterior is the final chain after the burn-in and thinning of its own tau (burn_and_thin). converged is
     the stopping rule's verdict at the last check; when it says no, a warning gives the reason (not_converged_text
     when the final chain is long enough by N/tau, else N/tau itself). More warnings flag poor mixing, stuck
-    walkers and walkers that end far behind.
+    walkers, walkers that end far behind, and in solve mode stripped and atmosphere-bearing planets between which
+    the walkers crossed fewer than PLATEAU_CROSSINGS times.
 
     Inputs:
         - run_dir: the run directory [str]
@@ -2364,7 +2369,9 @@ def write_summary(run_dir, state = 'finished'):
         - params: _stats of every physical parameter over the posterior (in solve mode the solved one from
           solve_value); sampled: the same for the sampler's coordinates (solve mode, else None)
         - solve: in solve mode its settings and the model runs per evaluation (solve.evals_stats; evals_init,
-          evals_sampling, evals_posterior), else None
+          evals_sampling, evals_posterior), plateau (solve.plateau) and branches (after the burn-in: the
+          stripped_fraction of the samples and crossings_median, the walkers' median number of crossings between
+          stripped and not), else None
         - blobs: _stats of every blob field over the posterior, with frac_nan
         - map: the sample with the highest lp in the current chain (burn-in included; in solve mode lp includes
           log_jac): step (over the whole run), walker, lp, theta (physical), sampled (solve mode), log_prior,
@@ -2421,6 +2428,22 @@ def write_summary(run_dir, state = 'finished'):
                         f'plateau), {"it is" if one else "they are"} part of the posterior samples; run longer'
                         + ('' if has_reset else ' or set sampler.reset_stuck_at'))
 
+    # Solve mode with the plateau branch: stripped planets and planets that keep an atmosphere lie in separate
+    # stretches of u, usually with a gap between them (the jump of the observable at the stripping edge), which the
+    # walkers cross rarely. tau of the sampled coordinates does not see that, so the crossings are counted.
+    plateau = None
+    if config.solve_on(cfg) and blobs is not None and 'exhausted' in blobs.dtype.names and discard < n:
+        stripped = blobs['exhausted'][discard:] == 1 # (steps, walkers) after the burn-in
+        crossings = np.sum(stripped[1:] != stripped[:-1], axis = 0) # of each walker
+        plateau = {'stripped_fraction': float(stripped.mean()), 'crossings_median': float(np.median(crossings))}
+        if 0.01 <= plateau['stripped_fraction'] <= 0.99 and plateau['crossings_median'] < PLATEAU_CROSSINGS:
+            warnings.append(f"{100*plateau['stripped_fraction']:.0f}% of the posterior after the burn-in are stripped "
+                            'planets (the plateau branch of solve mode) and the rest keep an atmosphere. In u they lie '
+                            'in separate stretches, which each walker crossed only '
+                            f"{plateau['crossings_median']:.0f} times (median; {PLATEAU_CROSSINGS} wanted), so the "
+                            'split between them is less certain than tau says: run longer, or check it with plain '
+                            "sampling (--set 'solve.param=\"\"')")
+
     # the MAP sample, then the posterior statistics
     i_step, i_walker = np.unravel_index(np.argmax(lp), lp.shape) # the highest lp, burn-in included
     best = blobs[i_step, i_walker]
@@ -2442,7 +2465,8 @@ def write_summary(run_dir, state = 'finished'):
                    'warm_start': sv['warm_start'], 'derivative': run_derivative(cfg, extra),
                    'refit_steps': solve.refit_steps(cfg), 'evals_init': solve.evals_stats(evals['init']),
                    'evals_sampling': solve.evals_stats(evals['sampling']),
-                   'evals_posterior': _stats(post_blobs['solve_evals']) if 'solve_evals' in stored else None}
+                   'evals_posterior': _stats(post_blobs['solve_evals']) if 'solve_evals' in stored else None,
+                   'plateau': bool(sv.get('plateau', False)), 'branches': plateau}
     summary = {
         'state': state, 'name': cfg['name'], 'description': cfg['description'], 'run_dir': run['run_dir'],
         'provenance': prov,

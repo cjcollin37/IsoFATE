@@ -63,12 +63,39 @@ the number is measured on the test-point selection. The equivalent-shift block s
 derivative runs are made at (P* + h, phi) of the reference cell, and the shift of P* itself between a cell and
 the reference (solve_shift) is reported.
 
+Posterior test (source = "chain:RUN_DIR"). The per-point rule asks every test point to pass, so one point in a
+tail of the posterior can fail a cell whose posterior does not change. With posterior draws of an MCMC run as the
+test points, the study also compares the posteriors themselves. The draws come from the run's posterior p_run, so
+weights w = count*exp(lp(cell) - lp(run)) turn them into a sample of the cell's posterior (importance sampling;
+count: how often the point was drawn; lp in the sampler's coordinates, ln|J| included in solve mode). For each
+quantity (the free parameters, in solve mode with P* of each cell's solve, and the active model observables in
+the likelihood's space) the weighted 16%, 50% and 84% quantiles are compared with the reference cell's:
+
+    shift = max |q(cell) - q(reference)| / h,    h = (q84 - q16)/2 of the reference
+
+    PASS    the 90% range of the shift over POST_BOOT bootstrap resamples of the draws lies at or below post_tol
+    FAIL    it lies above post_tol; or the weights collapse (ESS < POST_ESS_MIN of the plain draws') at one of
+            the cell and the reference while the other's ESS is twice that or more: that posterior moved far
+            from the run's while the other did not; or a quantity is defined at one of them only
+    ?       inconclusive: the range straddles post_tol (more draws would tell), or the weights collapse in any
+            other way, or no quantity has a width
+
+A quantity counts only where the reference posterior gives it a width: defined at POST_MIN_DEFINED points or more,
+and not the same value at all of them. STABLE and the posterior-based recommendation follow as above. The run
+itself (its own draws and blobs) is compared with the reference too, which answers whether its resolution was
+enough. Reweighting checks the posterior only where the run's draws are. A change there shows up as a shift or as
+collapsed weights, e.g. a mode that moved or one the run's tails reach. Mass that a cell has where the run has no
+draws leaves the weights unchanged and is not seen at all, e.g. the stripped planets of the plateau branch in a
+run sampled without it (_chain_points warns of that case). The draws re-run at the run's own resolution, when it is
+in the grid, must give the chain's lp back; the warnings say when they do not (a change of the config or the model
+since the run).
+
 Files in <output_root>/<name>/resolution_<stamp>/:
     config.json          the resolved config, with [resolution] as used
     points.npz           theta, theta_perturbed and theta_shifted (points, ndim), the coordinate names (free;
                          physical_free: the physical parameters), the source, and the selection candidates with
                          their lp, status and model runs (with source = "bisect" also the bisection arrays,
-                         bisect_*)
+                         bisect_*; with a chain the draws: chain_counts, chain_lp, chain_blobs, ...)
     results.npz          blobs (points, cells, 2) as model.blob_dtype() ([..., 1] is the perturbed run, absent
                          when perturb = 0), lp, the cells, d and noise (points, cells, observables), dlogl,
                          rel_diff, and per cell worst_d, worst_dlogl, worst_noise, mean_runtime [s], mean_runs
@@ -76,7 +103,10 @@ Files in <output_root>/<name>/resolution_<stamp>/:
                          equivalent shift: shift_blobs (points,), deriv (points, observables), shift and
                          shift_frac (points, cells, observables), worst_shift, ridge_dlogl (points, cells),
                          ridge_spread, passes_shift, stable_shift, recommended_shift; solve mode: solve (true),
-                         solve_shift (points, cells), worst_solve_shift
+                         solve_shift (points, cells), worst_solve_shift; the posterior test: post_names,
+                         post_quantiles and post_shift (cells + the run itself, quantities, 3), post_half_width,
+                         post_worst, post_lo, post_hi, post_ess, post_verdict, post_stable,
+                         recommended_posterior
     table.txt            the summary for humans (also printed)
     recommendation.json  the recommended cell, the command line options to use it, and every cell's verdict
     resolution_heatmap.png, resolution_convergence.png (plots.plot_resolution)
@@ -105,7 +135,14 @@ SHIFT_STEP = 1e-4 # derivative step of the equivalent shift [fraction of the pri
 FIDUCIAL = (100000, 100) # (n_steps, n_atmodeller) of the previous runs; every table reports its verdict
 SMALL_TIER = 300000 # cells up to this n_steps share the first pool; larger ones may get fewer workers (memory)
 RAN = (model.OK, model.NO_LIKELIHOOD) # statuses of evaluations whose model ran to the end
-VERDICT_MARK = {'reference': 'R', 'stable': 'S', 'pass': 'p', 'fail': 'x', 'skipped': '-'} # grid marks in table.txt
+VERDICT_MARK = {'reference': 'R', 'stable': 'S', 'pass': 'p', 'fail': 'x', 'inconclusive': '?',
+                'skipped': '-'} # grid marks in table.txt
+POST_QUANTILES = (0.16, 0.5, 0.84) # the posterior quantiles that the posterior test compares
+POST_QUANTILE_NAMES = ('q16', 'median', 'q84')
+POST_BOOT = 400 # bootstrap resamples of the draws, for the 90% range of each cell's posterior shift
+POST_ESS_MIN = 0.3 # weights whose ESS is below this fraction of the plain draws' have collapsed
+POST_MIN_DRAWS = 50 # a posterior test on fewer draws gets a warning
+POST_MIN_DEFINED = 10 # a quantity counts in the posterior test when defined at this many points of the reference
 WIDTH = 110 # line width of table.txt [characters]
 
 
@@ -545,56 +582,166 @@ def read_discard(run_dir, n_steps):
     return n_steps//2
 
 
+def _posterior_changes(rcfg, cfg):
+    '''
+    Returns the settings that shape the posterior and differ between the config of an MCMC run and a study's:
+    the star, the planet, the model settings other than the resolution, the priors of the free parameters (a free
+    parameter's value only places the walkers) and the values of the fixed ones (their bounds are unused), the
+    observables, in solve mode the solved parameter, its observable and the u range, and whether the posterior
+    holds the stripped planets of a plateau (solve.plateau, or no solve mode; plateau_change)
+
+    Inputs:
+        - rcfg: resolved config of the run (config.json of its directory) [dict]
+        - cfg: resolved config of the study [dict]
+
+    Output: the dotted names of the settings that differ, e.g. ['params.albedo', 'observables.Rp'] [list]
+    '''
+    def same(a, b):
+        return json.dumps(a, sort_keys = True, default = str) == json.dumps(b, sort_keys = True, default = str)
+
+    def prior(p):
+        '''
+        What of a parameter's entry shapes the posterior: the prior of a free one (not its value or label), the
+        value of a fixed one; None for a parameter that is not there
+        '''
+        if p is None:
+            return None
+        if not p.get('vary'):
+            return {'vary': False, 'value': p.get('value')}
+        return {key: v for key, v in p.items() if key not in ('label', 'init_scale', 'value')}
+
+    out = [section for section in ('star', 'planet') if not same(rcfg.get(section), cfg.get(section))]
+    for key in sorted(set(rcfg['model']) | set(cfg['model'])):
+        if key not in ('n_steps', 'n_atmodeller', 'allow_large_n_steps') and \
+                not same(rcfg['model'].get(key), cfg['model'].get(key)):
+            out.append(f'model.{key}')
+    for name in sorted(set(rcfg['params']) | set(cfg['params'])):
+        if not same(prior(rcfg['params'].get(name)), prior(cfg['params'].get(name))):
+            out.append(f'params.{name}')
+    for name in sorted(set(rcfg['observables']) | set(cfg['observables'])):
+        a, b = (dict(c['observables'].get(name) or {}) for c in (rcfg, cfg))
+        a.pop('label', None)
+        b.pop('label', None)
+        if not same(a, b):
+            out.append(f'observables.{name}')
+    if config.solve_on(rcfg) and config.solve_on(cfg):
+        out += [f'solve.{key}' for key in ('param', 'observable', 'range_sigma')
+                if not same(rcfg['solve'].get(key), cfg['solve'].get(key))]
+    if plateau_change(rcfg, cfg):
+        out.append('solve.plateau')
+    return out
+
+
+def plateau_change(rcfg, cfg):
+    '''
+    Returns whether exactly one of an MCMC run and a study leaves out the stripped planets of a plateau of the
+    solve observable: solve mode without the plateau branch does (solve.plateau false, or a config saved before
+    the option), plain sampling and solve mode with the branch do not
+
+    Inputs:
+        - rcfg, cfg: resolved configs of the run and of the study [dict]
+
+    Output: True when the two differ there [Bool]
+    '''
+    def keeps(c):
+        return not config.solve_on(c) or bool(c['solve'].get('plateau', False))
+    return keeps(rcfg) != keeps(cfg)
+
+
 def _chain_points(run_dir, cfg, n, rng, warnings, solving = False):
     '''
-    Picks test points from a previous MCMC run: n distinct random posterior samples after the burn-in
-    The samples are physical thetas, or in the sampler's coordinates when solving. A chain sampled in the other
-    coordinates is converted with its blobs: a solve-mode run's physical point takes P* from its blobs, and a run
-    without solve mode gives u = T(observable) of its blobs (samples outside the u support are left out).
-    Fewer than n distinct samples: all of them, with a warning. Errors when the run directory has no chain.npz,
-    its config has other free parameters, a conversion has no blobs, or no finite sample is left.
+    Picks test points from a previous MCMC run: n random draws of its posterior samples after the burn-in
+    Walkers repeat positions (a walker stays put when its move is rejected), so draws can hit the same point: it
+    runs once and counts as often as it was drawn, so that the draws stay a fair sample of the posterior for the
+    posterior test (posterior_test). The samples are physical thetas, or in the sampler's coordinates when
+    solving. A chain sampled in the other coordinates is converted with its blobs: a solve-mode run's physical
+    point takes P* from its blobs, and a run without solve mode gives u = T(observable) of its blobs (samples
+    outside the u support are left out). Fewer than n samples: all of them, with a warning; settings that shape
+    the posterior and differ from the run's config get a warning too. Errors when the run directory has no
+    chain.npz, its config has other free parameters, a conversion has no blobs, or no finite sample is left.
     Same inputs as _prescan_points with run_dir first (no pool: nothing is evaluated).
 
-    Output: (thetas, {}): the test points (n, ndim) and an empty selection [tuple]
+    Output: (thetas, selection) [tuple]
+        - thetas: the distinct points drawn (points, ndim) [array]
+        - selection: what the posterior test needs [dict]
+            - chain_counts: how often each point was drawn (points,); chain_draws: the draws (their sum);
+              chain_samples: the samples after the burn-in that they were drawn from
+            - chain_lp: the run's log-density at each point in the study's coordinates (points,): the chain's
+              log_prob, or log_prior + log_like of its blobs for a solve-mode run studied at fixed physical
+              parameters (the physical density has no Jacobian); NaN for a run without solve mode studied in
+              solve mode, whose chain has no ln|dP*/du|, with the reason in chain_lp_note (else '')
+            - chain_blobs: the chain's blobs of the points (absent when the chain has none)
+            - chain_n_steps, chain_n_atmodeller: the run's resolution (-1 when its config is not saved)
     '''
     path = os.path.join(run_dir, 'chain.npz')
     if not os.path.exists(path):
         raise FileNotFoundError(f'source = "chain:{run_dir}": there is no chain.npz in it')
     # the run's config, when saved: the same free parameters, and whether it sampled in solve mode
     run_cfg = os.path.join(run_dir, 'config.json')
-    run_solved = False
+    run_solved, resolution = False, (-1, -1)
     if os.path.exists(run_cfg):
         rcfg = config.load_resolved(run_cfg)
         if list(rcfg['free']) != list(cfg['free']):
             raise config.ConfigError(f'the run in {run_dir} has free parameters {rcfg["free"]}, this config '
                                      f'{cfg["free"]}')
         run_solved = config.solve_on(rcfg)
+        resolution = (rcfg['model']['n_steps'], rcfg['model']['n_atmodeller'])
+        changes = [c for c in _posterior_changes(rcfg, cfg) if c != 'solve.plateau']
+        if changes:
+            warnings.append(f"this config differs from the run's in {', '.join(changes)}: the posterior test then "
+                            'measures that change as well as the resolution\'s')
+        if plateau_change(rcfg, cfg):
+            run_keeps = not config.solve_on(rcfg) or bool(rcfg['solve'].get('plateau', False))
+            warnings.append(('the run leaves out the stripped planets of the plateau (solve mode without the plateau '
+                             'branch), which this study keeps' if not run_keeps else
+                             'this study leaves out the stripped planets of the plateau (solve mode without the '
+                             'plateau branch), which the run keeps')
+                            + ': the run has no draws among them, so the posterior test cannot see that mass at '
+                            'all. Sample again with solve.plateau = true or without solve mode, or test with the '
+                            'same setting')
     with np.load(path) as data: # chain (steps, walkers, ndim), log_prob (steps, walkers)
         chain, log_prob = data['chain'], data['log_prob']
         blobs = data['blobs'] if 'blobs' in data.files else None
     discard = read_discard(run_dir, chain.shape[0])
     # after the burn-in, steps and walkers flattened into one list of samples with a finite lp
-    keep = np.isfinite(log_prob[discard:].reshape(-1))
-    samples = chain[discard:].reshape(-1, chain.shape[-1])[keep]
+    lp = log_prob[discard:].reshape(-1)
+    keep = np.isfinite(lp)
+    samples, lp = chain[discard:].reshape(-1, chain.shape[-1])[keep], lp[keep]
     sample_blobs = blobs[discard:].reshape(-1)[keep] if blobs is not None else None
+    note = '' # why the posterior test cannot be done, if it cannot
     if run_solved != solving: # the chain is in the other coordinates
         if sample_blobs is None:
             raise RuntimeError(f'{path} has no blobs to convert its samples between solve mode and the physical '
                                'parameters')
-        if run_solved: # to physical: P* = solve_value of each sample
-            samples = solve.physical(samples, sample_blobs['solve_value'], cfg)
+        if run_solved: # to physical: P* = solve_value of each sample (the run's slot), with the physical density
+            samples = solve.physical(samples, sample_blobs['solve_value'], rcfg)
+            lp = sample_blobs['log_prior'] + sample_blobs['log_like']
         else: # to the sampler's coordinates: u = T(observable) of each sample
             samples = solve.to_sampled(samples, sample_blobs, cfg)
             lo, hi = cfg['solve']['bounds']
             u = samples[:, cfg['solve']['index']]
-            samples = samples[np.isfinite(u) & (u >= lo) & (u <= hi)] # inside the u support
-    # distinct finite samples: walkers repeat positions (a walker stays put when its move is rejected)
-    samples = np.unique(samples[np.all(np.isfinite(samples), axis = 1)], axis = 0)
+            inside = np.isfinite(u) & (u >= lo) & (u <= hi) # inside the u support
+            samples, sample_blobs = samples[inside], sample_blobs[inside]
+            lp = np.full(len(samples), nan)
+            note = ('the run sampled the physical parameters, so its chain has no ln|dP*/du| of solve mode: run '
+                    'the study with --no-solve for the posterior test')
+    finite = np.all(np.isfinite(samples), axis = 1)
+    samples, lp = samples[finite], lp[finite]
+    sample_blobs = sample_blobs[finite] if sample_blobs is not None else None
     if len(samples) == 0:
         raise RuntimeError(f'no finite posterior samples in {path}' + (' inside the u support' if solving else ''))
     if len(samples) < n:
-        warnings.append(f'the chain has only {len(samples)} distinct posterior samples; using them all')
-    return samples[rng.choice(len(samples), size = min(n, len(samples)), replace = False)], {}
+        warnings.append(f'the chain has only {len(samples)} posterior samples after its burn-in; using them all')
+    pick = rng.choice(len(samples), size = min(n, len(samples)), replace = False)
+    # the distinct points of the draws, each with the index of its first draw and its count
+    thetas, first, counts = np.unique(samples[pick], axis = 0, return_index = True, return_counts = True)
+    first = pick[first]
+    selection = {'chain_counts': counts, 'chain_draws': len(pick), 'chain_samples': len(samples),
+                 'chain_lp': lp[first], 'chain_lp_note': note, 'chain_n_steps': resolution[0],
+                 'chain_n_atmodeller': resolution[1]}
+    if sample_blobs is not None:
+        selection['chain_blobs'] = sample_blobs[first]
+    return thetas, selection
 
 
 def perturbed(theta, cfg, perturb, j = 0):
@@ -650,7 +797,9 @@ def _source_text(source, n, info):
                 'draws converged; the better half by log-probability, spread out by farthest-point sampling)')
     if source == 'bisect': # the bisection found nothing: prescan points
         return f"{_plural(n, 'test point')} from a prescan (the bisection found none; see the warnings)"
-    return f"{_plural(n, 'random posterior sample')} of {source[len('chain:'):]}" # source = 'chain:RUN_DIR'
+    draws = info.get('chain_draws', n) # source = 'chain:RUN_DIR'
+    distinct = f' ({n} distinct)' if draws != n else ''
+    return f"{_plural(draws, 'random posterior sample')}{distinct} of {source[len('chain:'):]}"
 
 
 ###_____Metrics_____###
@@ -976,6 +1125,234 @@ def analyse(cfg, cells, blobs, ref, tol, dlogl_tol, shift_blobs = None, shift_h 
     return out
 
 
+###_____The posterior test_____###
+
+def weighted_quantiles(x, w, q):
+    '''
+    Calculates weighted quantiles, one set per row of weights
+    Each sample sits at the middle of its share of the total weight, and a quantile is interpolated linearly
+    between the samples around it (beyond the outermost ones it is their value): np.interp over the samples of
+    positive weight, for every row at once. Samples of zero weight or with a NaN value play no part.
+
+    Inputs:
+        - x: values (n,) [array]
+        - w: weights >= 0, (n,) or one row per weighting (B, n) [array]
+        - q: quantiles in [0, 1] (m,) [array]
+
+    Output: the quantiles (m,), or (B, m) for rows of weights; NaN for a row without weight [array]
+    '''
+    x = np.asarray(x, dtype = float)
+    q = np.atleast_1d(np.asarray(q, dtype = float))
+    rows = np.where(np.isnan(x), 0.0, np.atleast_2d(np.asarray(w, dtype = float)))
+    out = np.full((len(rows), len(q)), nan)
+    n = len(x)
+    if n == 0:
+        return out if np.ndim(w) > 1 else out[0]
+    order = np.argsort(np.where(np.isnan(x), inf, x), kind = 'stable')
+    xs, ws = x[order], rows[:, order]
+    total = ws.sum(axis = 1)
+    mid = (np.cumsum(ws, axis = 1) - 0.5*ws)/np.where(total > 0, total, 1.0)[:, None]
+    # a sample of zero weight takes the place of the last one of positive weight before it (at the start: of the
+    # first one), so that it changes nothing
+    positive = ws > 0
+    last = np.maximum.accumulate(np.where(positive, np.arange(n), -1), axis = 1)
+    src = np.where(last >= 0, last, np.argmax(positive, axis = 1)[:, None])
+    mid, vals = np.take_along_axis(mid, src, axis = 1), xs[src]
+    r = np.arange(len(ws))
+    for i, qi in enumerate(q):
+        j = np.sum(mid <= qi, axis = 1) # the samples at or below qi: qi lies between samples j - 1 and j
+        lo, hi = np.clip(j - 1, 0, n - 1), np.clip(j, 0, n - 1)
+        with np.errstate(invalid = 'ignore', divide = 'ignore'):
+            inner = vals[r, lo] + (qi - mid[r, lo])/(mid[r, hi] - mid[r, lo])*(vals[r, hi] - vals[r, lo])
+        out[:, i] = np.where(j == 0, vals[:, 0], np.where(j == n, vals[:, -1], inner))
+    out[~(total > 0)] = nan
+    return out if np.ndim(w) > 1 else out[0]
+
+
+def posterior_shifts(values, log_r, counts, ref, rng, n_boot = POST_BOOT):
+    '''
+    Compares posteriors estimated from the same draws by importance weights with a reference one: the shift of
+    each quantile (POST_QUANTILES) of each quantity, in units of the reference's 68% half-width, and the bootstrap
+    of the worst shift
+    E, n, K below: the weightings (e.g. the cells of a study), the distinct points of the draws, the quantities.
+    The bootstrap resamples the draws (multinomial counts over the points), the same resamples for every
+    weighting, so that it measures the Monte Carlo error of each difference from the reference.
+
+    Inputs:
+        - values: each quantity at each point under each weighting (E, n, K) [array]
+        - log_r: log importance ratio of each point under each weighting (E, n): the weight is
+          count*exp(log_r), none where log_r is -inf or NaN [array]
+        - counts: draws of each point (n,) [array]
+        - ref: index of the reference weighting [int]
+        - rng: random generator of the bootstrap [numpy Generator]
+        - n_boot: bootstrap resamples [int]
+
+    A quantity counts in the worst shift only when the reference posterior has a width for it: defined at
+    POST_MIN_DEFINED points that have weight (every point, when there are fewer), and a half-width above 0 (one
+    distinct draw, or an upper limit undefined at most draws, has none). In a bootstrap resample a quantity whose
+    half-width is 0 is left out of that resample's worst shift, and a resample without any counts as an infinite
+    shift.
+
+    Output: [dict]
+        - quantiles: (E, K, 3) [unit of each quantity]; half_width: the reference's (q84 - q16)/2 (K,)
+        - shift: |quantile - the reference's|/half_width (E, K, 3); 0 where they are equal, inf where only one
+          is defined (distance)
+        - usable: the quantities that count (K,) [Bool array]
+        - worst, worst_k, worst_q: per weighting, the largest shift over the usable quantities with its quantity
+          and quantile (E,); worst is NaN without a usable quantity
+        - lo, hi: 5% and 95% points of the worst shift over the bootstrap resamples (E,), taken without
+          interpolation so that an infinite shift stays inf; NaN without a usable quantity
+        - ess: effective sample size of the weights, (sum w)^2/sum w^2, as a fraction of the plain draws'
+          (E,); 0 without weight
+    '''
+    values = np.asarray(values, dtype = float)
+    counts = np.asarray(counts, dtype = float)
+    n_e, n_k = values.shape[0], values.shape[2]
+    log_r = np.asarray(log_r, dtype = float)
+    log_r = np.where(np.isnan(log_r), -inf, log_r)
+    top = np.max(log_r, axis = 1, keepdims = True)
+    with np.errstate(invalid = 'ignore'): # a weighting without weight has top = -inf
+        ratio = np.where(np.isfinite(top), np.exp(log_r - np.where(np.isfinite(top), top, 0.0)), 0.0)
+    w = counts*ratio
+    ess0 = counts.sum()**2/np.sum(counts**2) # the plain draws': below their number when points repeat
+    with np.errstate(invalid = 'ignore', divide = 'ignore'):
+        ess = np.where(w.sum(axis = 1) > 0, w.sum(axis = 1)**2/np.sum(w**2, axis = 1), 0.0)/ess0
+    total = int(round(counts.sum()))
+    boot = rng.multinomial(total, counts/counts.sum(), size = n_boot) # (B, n)
+    quantiles = np.full((n_e, n_k, len(POST_QUANTILES)), nan)
+    quantiles_b = np.full((n_e, n_boot, n_k, len(POST_QUANTILES)), nan)
+    for e in range(n_e):
+        for k in range(n_k):
+            quantiles[e, k] = weighted_quantiles(values[e, :, k], w[e], POST_QUANTILES)
+            quantiles_b[e, :, k] = weighted_quantiles(values[e, :, k], boot*ratio[e], POST_QUANTILES)
+    half = (quantiles[ref, :, -1] - quantiles[ref, :, 0])/2
+    half_b = (quantiles_b[ref, :, :, -1] - quantiles_b[ref, :, :, 0])/2 # (B, K)
+    defined = np.sum(np.isfinite(values[ref]) & (w[ref][:, None] > 0), axis = 0) # points with a value and weight
+    # POST_MIN_DEFINED of them, or every point when there are fewer
+    usable = (defined >= min(POST_MIN_DEFINED, values.shape[1])) & (half > 0) & np.isfinite(half)
+    with np.errstate(divide = 'ignore', invalid = 'ignore'): # a zero half-width: any change is an infinite shift
+        shift = distance(quantiles, quantiles[ref][None], half[None, :, None])
+        shift_b = distance(quantiles_b, quantiles_b[ref][None], half_b[None, :, :, None]) # (E, B, K, 3)
+    # the worst over the usable quantities; NaN without any
+    counted = np.where(usable[None, :, None], np.where(np.isnan(shift), inf, shift), -1.0).reshape(n_e, -1)
+    worst_i = np.argmax(counted, axis = 1)
+    worst_k, worst_q = np.unravel_index(worst_i, shift.shape[1:])
+    worst = np.where(usable.any(), counted[np.arange(n_e), worst_i], nan)
+    # each resample: the usable quantities with a half-width in it; a resample without any is an infinite shift
+    keep = usable[None, :] & (half_b > 0) # (B, K)
+    counted_b = np.where(keep[None, :, :, None], np.where(np.isnan(shift_b), inf, shift_b), -1.0)
+    worst_b = np.max(counted_b.reshape(n_e, n_boot, -1), axis = 2)
+    worst_b = np.where(worst_b < 0, inf, worst_b)
+    lo = np.percentile(worst_b, 5, axis = 1, method = 'lower') # an actual resample: inf stays inf
+    hi = np.percentile(worst_b, 95, axis = 1, method = 'higher')
+    if not usable.any(): # nothing to compare: no range either
+        lo, hi = np.full(n_e, nan), np.full(n_e, nan)
+    return {'quantiles': quantiles, 'half_width': half, 'shift': shift, 'usable': usable, 'worst': worst,
+            'worst_k': worst_k, 'worst_q': worst_q, 'lo': lo, 'hi': hi, 'ess': ess}
+
+
+def post_verdict(res, e, ref, post_tol):
+    '''
+    Returns the verdict of the posterior test for weighting e against the reference ref (posterior_shifts' res)
+    When the weights collapse (ESS < POST_ESS_MIN) at one of the two while the other's ESS is at least twice that
+    limit, 'fail': that posterior moved far from the run's, the other did not. Any other collapse (at both, or at
+    one with the other close to the limit) is 'inconclusive': the bootstrap cannot be trusted when a few weights
+    dominate. Then an infinite worst shift (a quantity defined at one of them only) is 'fail', and no usable
+    quantity (NaN) 'inconclusive'. Else 'pass' when the 90% range of the worst shift lies at or below post_tol,
+    'fail' above it, and 'inconclusive' when it straddles post_tol (more draws would tell).
+    '''
+    if e == ref:
+        return 'reference'
+    ess, ess_ref = res['ess'][e], res['ess'][ref]
+    if min(ess, ess_ref) < POST_ESS_MIN:
+        return 'fail' if max(ess, ess_ref) >= 2*POST_ESS_MIN else 'inconclusive'
+    if math.isnan(res['worst'][e]):
+        return 'inconclusive'
+    if math.isinf(res['worst'][e]):
+        return 'fail'
+    if res['hi'][e] <= post_tol:
+        return 'pass'
+    return 'fail' if res['lo'][e] > post_tol else 'inconclusive'
+
+
+def posterior_test(study):
+    '''
+    Calculates the posterior test of a study on posterior draws of an MCMC run (source = "chain:RUN_DIR"): the
+    run's draws reweighted to each cell, against the reference cell (see the module docstring)
+    The draws come from the run's posterior, so a draw's weight at a cell is its count times
+    exp(lp(cell) - lp(run)), the ratio of the two posteriors (importance sampling), and 0 where lp(cell) is -inf
+    (a failed run, no root, outside the prior). The quantities are the physical free parameters (in solve mode
+    with P* of each cell's solve) and the active model observables in the likelihood's space. The run itself is
+    compared too, with its own draws and blobs, when the chain has blobs.
+
+    Inputs:
+        - study: the study dict of run_resolution, with its metrics [dict]
+
+    Output: the test, or None for another source [dict]
+        - available [Bool]; why: the reason when not [str]; post_tol, names (the quantities), draws, distinct
+        - posterior_shifts' arrays over the cells, then the run itself (last, when has_run); left_out: the
+          quantities without a width at the reference, which do not count [list]
+        - verdict: per cell, as the per-point test's plus 'inconclusive'; run_verdict (None without has_run)
+        - passes, stable (cells,), recommended: the fastest stable cell, or None
+        - run_n_steps, run_n_atmodeller: the run's resolution (-1: unknown); run_cell: its index in the grid, or
+          None; identity: the largest |lp - lp(run)| of the draws there (None when not computed)
+    '''
+    if not study['source'].startswith('chain:'):
+        return None
+    cfg, cells, m, sel = study['cfg'], study['cells'], study['metrics'], study['selection']
+    ref, solving, lp = study['reference'], bool(study.get('solve')), study['lp']
+    names = m['obs_names']
+    post_tol = cfg['resolution'].get('post_tol', config.RESOLUTION_DEFAULTS['post_tol'])
+    counts = np.asarray(sel['chain_counts'], dtype = float)
+    lp_run = np.asarray(sel['chain_lp'], dtype = float)
+    out = {'available': False, 'why': sel.get('chain_lp_note') or '', 'post_tol': post_tol,
+           'names': list(cfg['free']) + names, 'draws': int(sel['chain_draws']), 'distinct': len(counts),
+           'run_n_steps': int(sel['chain_n_steps']), 'run_n_atmodeller': int(sel['chain_n_atmodeller'])}
+    if not np.isfinite(lp_run).all():
+        out['why'] = out['why'] or "the chain has no log-density at some of its draws"
+        return out
+    if not np.isfinite(lp[:, ref, 0]).any():
+        out['why'] = 'no draw has a finite density at the reference cell'
+        return out
+
+    def values(b):
+        '''
+        The quantities at the points (points, K) from their blobs b (points,): the physical free parameters (in
+        solve mode with P* of the blobs), then the observables in the likelihood's space
+        '''
+        phys = solve.physical(study['thetas'], b['solve_value'], cfg) if solving else study['thetas']
+        return np.column_stack([phys] + [_space(b[name], cfg['observables'][name]) for name in names])
+
+    entries = [values(study['blobs'][:, c, 0]) for c in range(len(cells))]
+    log_r = [lp[:, c, 0] - lp_run for c in range(len(cells))]
+    chain_blobs = sel.get('chain_blobs')
+    needed = names + (['solve_value'] if solving else [])
+    out['has_run'] = chain_blobs is not None and all(f in chain_blobs.dtype.names for f in needed)
+    if out['has_run']: # the run itself: the plain draws, with the chain's own model values
+        entries.append(values(chain_blobs))
+        log_r.append(np.zeros(len(counts)))
+    res = posterior_shifts(np.array(entries), np.array(log_r), counts, ref,
+                           np.random.default_rng(cfg['sampler']['seed']))
+    out.update(res, available = True)
+    out['left_out'] = [name for name, ok in zip(out['names'], res['usable']) if not ok]
+
+    computed = m['computed']
+    verdict = ['skipped' if not computed[c] else post_verdict(res, c, ref, post_tol) for c in range(len(cells))]
+    passes = np.array([v in ('pass', 'reference') for v in verdict])
+    stable = _stable(passes, cells, computed)
+    verdict = ['stable' if v == 'pass' and stable[c] else v for c, v in enumerate(verdict)]
+    candidates = list(np.flatnonzero(stable))
+    rec = min(candidates, key = lambda c: (m['mean_runtime'][c], c)) if candidates else None
+    out.update(verdict = verdict, passes = passes, stable = stable, recommended = None if rec is None else int(rec),
+               run_verdict = post_verdict(res, len(cells), ref, post_tol) if out['has_run'] else None)
+    # the run's own cell: the draws re-run there should give the chain's log-densities back
+    run_cell = _cell_index(cells, out['run_n_steps'], out['run_n_atmodeller'])
+    out['run_cell'] = run_cell if run_cell is not None and computed[run_cell] else None
+    out['identity'] = (float(np.max(distance(lp[:, run_cell, 0], lp_run))) if out['run_cell'] is not None
+                       else None)
+    return out
+
+
 ###_____Warnings_____###
 
 def _warnings(study):
@@ -983,8 +1360,9 @@ def _warnings(study):
     Returns the warnings of a finished study, worth reading before trusting the recommendation
     They cover roughness (a noise floor >= tol), a grid that shows no convergence, a recommendation at the coarse
     edge of the grid, outputs that are not fitted but change by more than 10%, a fiducial cell that is not
-    stable, left-out points, failed runs, unexpected errors, and too few test points. The test-point
-    selection's warnings come first, the config's last.
+    stable, left-out points, failed runs, unexpected errors, too few test points, and the posterior test (not
+    possible, too few draws, draws that do not reproduce the chain, weights that collapse at the reference). The
+    test-point selection's warnings come first, the config's last.
 
     Inputs:
         - study: the study dict of run_resolution, with its metrics [dict]
@@ -1048,6 +1426,24 @@ def _warnings(study):
     if len(study['thetas']) < 3:
         out.append(f"only {_plural(len(study['thetas']), 'test point')}: other parts of the parameter space are not "
                    'tested; use points >= 6 before trusting the recommendation')
+    post = study.get('posterior')
+    if post is not None and not post['available']:
+        out.append(f"no posterior test: {post['why']}")
+    elif post is not None:
+        if post['draws'] < POST_MIN_DRAWS:
+            out.append(f"the posterior test has only {_plural(post['draws'], 'draw')}, so its bootstrap ranges are "
+                       'wide and most cells come out inconclusive: use --points 100 or more')
+        if post['identity'] is not None and post['identity'] > dlogl_tol:
+            out.append("at the run's own resolution the re-run draws differ from the chain's log-densities by up "
+                       f"to {_fmt_d(post['identity'])} (> dlogl_tol): the config or the model changed since the run, "
+                       'and the posterior test measures that change as well as the resolution\'s')
+        if post['ess'][ref] < POST_ESS_MIN:
+            out.append("the posterior test cannot reweight the run's draws to the reference cell (ESS "
+                       f"{100*post['ess'][ref]:.0f}%): the run's resolution is not converged, or its config differs")
+        if post['left_out']:
+            out.append(f"the posterior test leaves out {', '.join(post['left_out'])}: the reference posterior gives "
+                       f'{"it" if len(post["left_out"]) == 1 else "them"} no width (defined at fewer than '
+                       f'{POST_MIN_DEFINED} of the points, or the same value at all of them)')
     return study['selection_warnings'] + out + [f'config: {w}' for w in cfg['warnings']]
 
 
@@ -1167,6 +1563,14 @@ def _grid_lines(study):
         dtext = 'ref' if v == 'reference' else _fmt_d(m['worst_d'][c])
         top[key] = f'[{VERDICT_MARK[v]} {dtext}]' if c == m['recommended'] else f'{VERDICT_MARK[v]} {dtext}'
         bottom[key] = fmt_seconds(m['mean_runtime'][c])
+    return _grid_layout(study, top, bottom)
+
+
+def _grid_layout(study, top, bottom):
+    '''
+    Returns the lines of a grid of table.txt from the two entries of each cell, keyed by (n_steps,
+    n_atmodeller): a header of the n_atmodeller values, then two lines per n_steps
+    '''
     header = [f'n_atm = {na}' for na in study['n_atmodeller']]
     width = max(len(t) for t in list(top.values()) + list(bottom.values()) + header) + 2 # the widest entry + 2
     lines = ['  n_steps  ' + ''.join(f'{h:>{width}}' for h in header)]
@@ -1193,13 +1597,93 @@ def _shift_grid_lines(study):
         top[key] = f'[{VERDICT_MARK[v]} {text}]' if c == m['recommended_shift'] else f'{VERDICT_MARK[v]} {text}'
         k = m['worst_shift_obs'][c]
         bottom[key] = m['obs_names'][k] if k >= 0 and v != 'reference' and m['worst_shift'][c] > 0 else ''
-    header = [f'n_atm = {na}' for na in study['n_atmodeller']]
-    width = max(len(t) for t in list(top.values()) + list(bottom.values()) + header) + 2
-    lines = ['  n_steps  ' + ''.join(f'{h:>{width}}' for h in header)]
-    for ns in study['n_steps']:
-        lines.append(f'  {fmt_n(ns):>7}  ' + ''.join(f'{top[ns, na]:>{width}}' for na in study['n_atmodeller']))
-        lines.append(' '*11 + ''.join(f'{bottom[ns, na]:>{width}}' for na in study['n_atmodeller']))
-    return lines
+    return _grid_layout(study, top, bottom)
+
+
+def _posterior_grid_lines(study):
+    '''
+    Returns the lines of the grid of the posterior test, two lines per n_steps like _grid_lines: the verdict and
+    the worst shift on top (in [brackets] at the posterior-based recommendation), the ESS of the weights below
+    '''
+    cells, post = study['cells'], study['posterior']
+    top, bottom = {}, {}
+    for c, cell in enumerate(cells):
+        key, v = (cell['n_steps'], cell['n_atmodeller']), post['verdict'][c]
+        if v == 'skipped':
+            top[key], bottom[key] = '-', 'skipped'
+            continue
+        text = 'ref' if v == 'reference' else _fmt_d(post['worst'][c])
+        top[key] = f'[{VERDICT_MARK[v]} {text}]' if c == post['recommended'] else f'{VERDICT_MARK[v]} {text}'
+        bottom[key] = f"ESS {100*post['ess'][c]:.0f}%"
+    return _grid_layout(study, top, bottom)
+
+
+def _post_entry_text(post, e):
+    '''
+    Returns the posterior test of weighting e (a cell, or the run itself at len(verdict)) as text for table.txt:
+    its verdict, worst shift with the 90% bootstrap range and where it is, and the ESS
+    '''
+    v = post['verdict'][e] if e < len(post['verdict']) else post['run_verdict']
+    words = {'stable': 'STABLE', 'pass': 'PASSES' if e == len(post['verdict']) else
+             'passes, but a finer cell does not (not stable)', 'fail': 'FAILS', 'inconclusive': 'INCONCLUSIVE',
+             'reference': 'the reference'}[v]
+    where = f"{post['names'][post['worst_k'][e]]} {POST_QUANTILE_NAMES[post['worst_q'][e]]}"
+    return (f"{words}: worst shift {_fmt_d(post['worst'][e])} (90%: {_fmt_d(post['lo'][e])} to "
+            f"{_fmt_d(post['hi'][e])}; {where}), ESS {100*post['ess'][e]:.0f}%")
+
+
+def _posterior_lines(study):
+    '''
+    Returns the table.txt block of the posterior test (posterior_test): how to read it, the grid of the worst
+    shift with the ESS of each cell, the run itself, and the posterior-based recommendation with its --set options
+    '''
+    cfg, cells, m, post = study['cfg'], study['cells'], study['metrics'], study['posterior']
+    ref = study['reference']
+    if not post['available']:
+        return _wrap(f"POSTERIOR TEST: not possible here, {post['why']}.", '')
+    out = ["POSTERIOR TEST: the posterior at each cell, from the run's draws"]
+    out += _wrap(f"The {_plural(post['draws'], 'posterior draw')} ({post['distinct']} distinct points) are "
+                 "reweighted to each cell by exp(lp(cell) - lp(run)), the ratio of the cell's posterior to the "
+                 "run's, and compared with the reference cell's: the grid shows the worst shift of the 16%, 50% "
+                 f"and 84% quantiles of {', '.join(post['names'])} (observables in the likelihood's space), in "
+                 "units of the reference posterior's 68% half-width, and below it the effective sample size of "
+                 "the weights (ESS) as a fraction of the plain draws'. A cell PASSES when the 90% range of its "
+                 f'worst shift over {POST_BOOT} bootstrap resamples of the draws lies at or below post_tol = '
+                 f"{post['post_tol']:g}. It FAILS when the range lies above, when a quantity is defined at only one "
+                 f'of the cell and the reference, or when the weights collapse (ESS < {100*POST_ESS_MIN:.0f}%) at '
+                 f'one of them while the other keeps {200*POST_ESS_MIN:.0f}% or more; it is inconclusive otherwise '
+                 '(more draws would tell). It is STABLE when every finer cell passes too. Reweighting only sees '
+                 "where the run's draws are: mass a cell has elsewhere goes unseen.", '  ')
+    out += _posterior_grid_lines(study)
+    out.append('  S stable   p passes, but a finer cell fails   x fails   ? inconclusive   R reference   '
+               '- skipped   [ ] recommended')
+    known = post['run_n_steps'] > 0
+    where = (f"n_steps = {fmt_n(post['run_n_steps'])}, n_atmodeller = {post['run_n_atmodeller']}" if known else
+             'its resolution unknown')
+    if post['has_run']:
+        out += _wrap(_post_entry_text(post, len(cells)) + '.', f'  the run itself ({where}; its own draws): ', '    ')
+    if post['ess'][ref] < POST_ESS_MIN:
+        out += _wrap("the reference posterior differs too much from the run's to reweight its draws: the run's "
+                     'resolution is not converged, or the config or the model changed since the run. Run the chain '
+                     'again at a finer resolution and repeat this test on it.', '  note: ', '    ')
+    elif known and post['run_cell'] is None:
+        out += _wrap("the run's own resolution is not in the grid: add it to check that the draws, re-run, give "
+                     "the chain's log-densities back.", '  note: ', '    ')
+    rec = post['recommended']
+    if rec is None:
+        out.append('POSTERIOR-BASED RECOMMENDATION: none (no cell is stable by the posterior test)')
+        return out
+    cell = cells[rec]
+    out.append(f"POSTERIOR-BASED RECOMMENDATION:  n_steps = {cell['n_steps']}, n_atmodeller = {cell['n_atmodeller']}")
+    if rec == ref:
+        why = 'the reference itself: no cheaper cell is stable by the posterior test.'
+    else:
+        why = (f"the fastest cell whose reweighted posterior stays within post_tol of the reference's, as does "
+               f"every finer cell's. {_post_entry_text(post, rec)}; {fmt_seconds(m['mean_runtime'][rec])} per "
+               'evaluation.')
+    out += _wrap(why, '  why:  ')
+    out += [f'      {options_text(cell)}']
+    return out
 
 
 def _shift_lines(study):
@@ -1298,8 +1782,9 @@ def _cell_verdict_text(study, c):
 def format_table(study):
     '''
     Returns the text of table.txt, which is also printed at the end of the study
-    In order: how to read it, the grid, the recommendation and why, the fiducial and config cells, the
-    equivalent shift, the noise floor, warnings, the test points, and per-cell and per-output details.
+    In order: how to read it, the grid, the recommendation and why, the fiducial and config cells, the posterior
+    test (chain sources), the equivalent shift, the noise floor, warnings, the test points, and per-cell and
+    per-output details.
 
     Inputs:
         - study: the study dict of run_resolution, with its metrics and warnings [dict]
@@ -1371,10 +1856,11 @@ def format_table(study):
                 f'      {run_command(cfg, cell)}',
                 f"  or set n_steps = {cell['n_steps']} and n_atmodeller = {cell['n_atmodeller']} in the [model] table "
                 'of the config.']
-        if not study['source'].startswith('chain:'): # suggest the check on posterior samples
-            out += _wrap('after a first MCMC run, re-check on the posterior itself, with enough points to reach '
-                         'its tails: python -m isofate.mcmc resolution CONFIG --source chain:RUN_DIR --points 30 '
-                         '(and only the few cells in question)', '  next: ')
+        if not study['source'].startswith('chain:'): # suggest the posterior test
+            out += _wrap('after a first MCMC run, test the resolution on its posterior: python -m isofate.mcmc '
+                         'resolution CONFIG --source chain:RUN_DIR --points 100 --set resolution.perturb=0, on '
+                         'only the cells in question (e.g. --n-steps 1e5,3e5,1e6 --n-atmodeller 100); its posterior '
+                         'test reweights the draws to each cell', '  next: ')
     out.append('')
 
     # the fiducial cell, and the config's own cell when it differs
@@ -1385,6 +1871,10 @@ def format_table(study):
         out += _wrap(_cell_verdict_text(study, _cell_index(cells, *current)),
                      f'  this config (n_steps = {fmt_n(current[0])}, n_atmodeller = {current[1]}): ', '    ')
     out.append('')
+
+    if study.get('posterior') is not None: # the posterior test of a chain source
+        out += _posterior_lines(study)
+        out.append('')
 
     if m.get('has_shift') and used.any(): # the equivalent shift and the second recommendation
         out += _shift_lines(study)
@@ -1578,8 +2068,9 @@ def _write_outputs(study, out_dir):
     module docstring for what each holds)
     A missing recommendation is -1 in results.npz and null in recommendation.json, which also holds the
     recommended cell with its --set options, run command and speed-up against the reference, the shift-based
-    recommendation and every cell's shift verdict, the reference, fiducial and config cells, the settings, the
-    warnings and every cell's entry (_json_cell). NaN and inf go into the json as NaN and Infinity (Python's json).
+    recommendation and every cell's shift verdict, the posterior test (its recommendation, the run itself and
+    every cell), the reference, fiducial and config cells, the settings, the warnings and every cell's entry
+    (_json_cell). NaN and inf go into the json as NaN and Infinity (Python's json).
     '''
     cfg, cells, m = study['cfg'], study['cells'], study['metrics']
     ref, rec = study['reference'], m['recommended']
@@ -1593,6 +2084,15 @@ def _write_outputs(study, out_dir):
         shift.update(shift_blobs = study['shift_blobs'], verdict_shift = np.array(m['verdict_shift']),
                      recommended_shift = -1 if rec_shift is None else rec_shift,
                      shift_param = cfg['free'][m['shift_j']])
+    post = study.get('posterior')
+    posterior = {} # the posterior test's arrays, when it was done
+    if post is not None and post['available']:
+        rec_post = post['recommended']
+        posterior = {f'post_{key}': np.asarray(post[key]) for key in ('quantiles', 'half_width', 'shift', 'worst',
+                                                                         'worst_k', 'worst_q', 'lo', 'hi', 'ess')}
+        posterior.update(post_names = np.array(post['names']), post_verdict = np.array(post['verdict']),
+                         post_stable = post['stable'], post_tol = post['post_tol'], post_has_run = post['has_run'],
+                         recommended_posterior = -1 if rec_post is None else rec_post)
     solved = {'solve': bool(m.get('solve'))} # solve mode: how far P* moves between each cell and the reference
     if m.get('solve'):
         solved.update(solve_shift = m['solve_shift'], worst_solve_shift = m['worst_solve_shift'],
@@ -1617,7 +2117,7 @@ def _write_outputs(study, out_dir):
         obs_spaces = np.array([cfg_names[n]['space'] for n in m['obs_names']]),
         rel_fields = np.array(m['rel_fields']), verdict = np.array(m['verdict']), reference = ref,
         recommended = -1 if rec is None else rec, tol = study['tol'], dlogl_tol = study['dlogl_tol'],
-        perturb = study['perturb'], name = cfg['name'], **shift, **solved,
+        perturb = study['perturb'], name = cfg['name'], **shift, **solved, **posterior,
         **{key: m[key] for key in ('computed', 'used', 'd', 'noise', 'dlogl', 'dlogl_noise', 'changed',
                                    'rel_diff', 'worst_d', 'worst_dlogl', 'worst_noise', 'worst_dlogl_noise',
                                    'mean_runtime', 'mean_runs', 'n_failed', 'worst_obs', 'worst_point', 'passes',
@@ -1648,9 +2148,36 @@ def _write_outputs(study, out_dir):
                                 'verdict': m['verdict_shift'][k], 'worst_shift': float(m['worst_shift'][k]),
                                 'ridge_spread': float(m['ridge_spread'][k])}
                                for k, cell in enumerate(cells)]
+    post_json = None # the posterior test: the posterior-based recommendation, the run itself and every cell
+    if post is not None:
+        post_json = {'available': post['available'], 'why': post['why'], 'post_tol': post['post_tol'],
+                     'draws': post['draws'], 'distinct_points': post['distinct'], 'quantities': post['names'],
+                     'recommended': None, 'run': None}
+        if post['available']:
+            def entry(e):
+                '''
+                Returns the json entry of weighting e: its worst shift with the 90% range and where, and the ESS
+                '''
+                verdict = post['verdict'][e] if e < len(cells) else post['run_verdict']
+                return {'verdict': verdict, 'worst_shift': float(post['worst'][e]),
+                        'shift_90': [float(post['lo'][e]), float(post['hi'][e])],
+                        'worst_quantity': post['names'][post['worst_k'][e]],
+                        'worst_quantile': POST_QUANTILE_NAMES[post['worst_q'][e]], 'ess': float(post['ess'][e])}
+            c = post['recommended']
+            if c is not None: # the cell's entry, with the posterior test's verdict and the per-point one apart
+                post_json['recommended'] = dict(summary(c), per_point_verdict = m['verdict'][c],
+                                                options = options_text(cells[c]), command = run_command(cfg, cells[c]))
+                post_json['recommended'].update(entry(c))
+            if post['has_run']:
+                post_json['run'] = dict(n_steps = post['run_n_steps'], n_atmodeller = post['run_n_atmodeller'],
+                                        **entry(len(cells)))
+            post_json.update(identity = post['identity'], left_out = post['left_out'])
+            post_json['cells'] = [dict(n_steps = cell['n_steps'], n_atmodeller = cell['n_atmodeller'], **entry(k))
+                                  for k, cell in enumerate(cells)]
     record = {'name': cfg['name'], 'created': study['stamp'], 'out_dir': out_dir, 'backend': cfg['model']['backend'],
               'recommended': rec_json, 'recommended_shift': shift_json['recommended'] if shift_json else None,
-              'equivalent_shift': shift_json, 'reference': summary(ref),
+              'recommended_posterior': post_json['recommended'] if post_json else None,
+              'equivalent_shift': shift_json, 'posterior_test': post_json, 'reference': summary(ref),
               'fiducial': summary(_cell_index(cells, *FIDUCIAL)),
               'config_cell': summary(_cell_index(cells, cfg['model']['n_steps'], cfg['model']['n_atmodeller'])),
               'tol': study['tol'], 'dlogl_tol': study['dlogl_tol'], 'perturb': study['perturb'],
@@ -1906,6 +2433,7 @@ def run_resolution(cfg, grid = 'default', points = None, source = None, workers 
              'thetas_shifted': thetas_shifted, 'solve': solving, 'space': space, 'noise_j': noise_j}
     study['metrics'] = analyse(cfg, cells, blobs, ref, tol, dlogl_tol, shift_blobs, shift_h, shift_j, shift_tol,
                                solving = solving, noise_step = noise_step)
+    study['posterior'] = posterior_test(study) # None unless the test points are posterior draws
     study['warnings'] = _warnings(study)
     study['wall_s'] = time.perf_counter() - t_start
     study['table'] = format_table(study)
@@ -1924,5 +2452,12 @@ def run_resolution(cfg, grid = 'default', points = None, source = None, workers 
         print(f'Recommended: {options_text(cells[rec])}   ({cell_name(cells[rec])}; details in table.txt)')
     if rec_shift is not None and rec_shift != rec:
         print(f'Shift-based: {options_text(cells[rec_shift])}   (equivalent shift <= shift_tol; see table.txt)')
+    post = study['posterior']
+    if post is not None and post['available']:
+        if post['recommended'] is not None:
+            print(f"Posterior-based: {options_text(cells[post['recommended']])}   (the reweighted posterior within "
+                  'post_tol; see table.txt)')
+        if post['has_run']:
+            print(f"The run itself: {_post_entry_text(post, len(cells))}")
     print(f'Results: {out_dir}', flush = True)
     return out_dir

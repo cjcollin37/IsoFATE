@@ -183,13 +183,13 @@ SAMPLER_DEFAULTS = {
     'stop_on_convergence': True, 'check_every': 100, 'n_tau': 50.0, 'tau_rtol': 0.01, 'tau_checks': 2, 'min_steps': 200,
     'burn_factor': 3.0, 'tracks': 200, 'track_points': 300, 'max_unexpected_errors': 10}
 SOLVE_DEFAULTS = {'param': '', 'observable': 'Rp', 'range_sigma': 6.0, 'tol': 0.01, 'max_evals': 40, 'warm_start': True,
-                  'derivative': 'forward', 'refit_steps': [25, 50, 100, 200, 400]}
+                  'derivative': 'forward', 'refit_steps': [25, 50, 100, 200, 400], 'plateau': True}
 EMPTY_LISTS = ('refit_steps',) # list options that may be empty (refit_steps = []: never refit)
 PARALLEL_DEFAULTS = {'workers': 6, 'max_memory_gb': 8.0, 'check_available': True, 'cache': True, 'warmup': True}
 RESOLUTION_DEFAULTS = {
     'n_steps': [10000, 30000, 100000, 300000, 1000000], 'n_atmodeller': [1000, 300, 100, 30, 10, 3, 1],
     'points': 6, 'source': 'auto', 'tol': 0.1, 'dlogl_tol': 0.5, 'perturb': 1e-6, 'shift_tol': 1e-3,
-    'max_eval_seconds': 300.0}
+    'post_tol': 0.2, 'max_eval_seconds': 300.0}
 
 # Allowed values of the string options (_choice); mantle_iron_type is model.mantle_iron.type
 CHOICES = {
@@ -871,21 +871,23 @@ def sampled_names(cfg):
     return list(cfg.get('sampled', cfg['free']))
 
 
-def _bare_core_warning(cfg, o, bounds, warnings):
+def _bare_core_warning(cfg, o, bounds, plateau, warnings, notes):
     '''
-    Warns when solve mode on Rp along log_f_atm leaves out the stripped planets
+    Notes, or warns, when the bare-core plateau of Rp lies inside the u support of solve mode on Rp along log_f_atm
     Below the stripping edge (the initial log_f_atm under which the planet loses its whole atmosphere before the
     end of the run) every log_f_atm gives Rp = the bare-core radius, (Mp/M_earth)^(1/4) R_earth (Lopez & Fortney
     2014): a plateau of Rp, which cannot be inverted for log_f_atm. When the bare-core radius over the Mp prior
-    (its bounds, else the Mp value) reaches into the u support, solve mode leaves out the posterior mass of
-    stripped planets, which plain sampling includes. The warning gives how many sigma the bare core at the Mp
-    value lies from the Rp datum.
+    (its bounds, else the Mp value) reaches into the u support, the plateau branch (solve.plateau, solve.py) gives
+    the stripped planets the u that have no root: a note. Without it solve mode leaves out their posterior mass,
+    which plain sampling includes: a warning, with how many sigma the bare core at the Mp value lies from the Rp
+    datum.
 
     Inputs:
         - cfg: the cfg dict being built [dict]
         - o: the Rp observable, cfg['observables']['Rp'] [dict]
         - bounds: the u support [lo, hi], in the likelihood space of Rp [list]
-        - warnings: list the warning is appended to [list]
+        - plateau: solve.plateau [Bool]
+        - warnings, notes: lists the warning or the note is appended to [list]
     '''
     from isofate.constants import Me, Re
     from isofate.isofunks import R_core
@@ -899,12 +901,17 @@ def _bare_core_warning(cfg, o, bounds, warnings):
     # Distance of the bare core from the datum [sigma], with the sigma of the side it lies on
     d = (core - likelihood.observed(o))/likelihood.sigma_eff(o, above = core > likelihood.observed(o))
     span = f'{min(cores):.4g}-{max(cores):.4g} R_earth over the Mp prior' if len(cores) > 1 else f'{core:.4g} R_earth'
-    warnings.append(f'solve mode on Rp along log_f_atm: a planet that loses its atmosphere has Rp = the bare-core '
-                    f'radius ({span}) for every log_f_atm below the stripping edge. That plateau lies inside the u '
-                    f'range [{bounds[0]:.4g}, {bounds[1]:.4g}] and cannot be inverted, so solve mode leaves out the '
-                    f'posterior mass of stripped planets, which plain sampling includes (at Mp = {p["value"]:.4g} the '
-                    f'bare core is {d:+.2g} sigma from the Rp datum). Sample without solve mode unless stripped '
-                    'planets are ruled out (see "Solve mode" in the README)')
+    text = (f'solve mode on Rp along log_f_atm: a planet that loses its atmosphere has Rp = the bare-core radius '
+            f'({span}) for every log_f_atm below the stripping edge, a plateau inside the u range [{bounds[0]:.4g}, '
+            f'{bounds[1]:.4g}] that cannot be inverted (at Mp = {p["value"]:.4g} the bare core is {d:+.2g} sigma from '
+            'the Rp datum). ')
+    if plateau:
+        notes.append(text + 'The plateau branch (solve.plateau) samples the stripped planets through the u that '
+                     'have no root (see "Solve mode" in the README)')
+    else:
+        warnings.append(text + 'With solve.plateau = false solve mode leaves out the posterior mass of stripped '
+                        'planets, which plain sampling includes: set solve.plateau = true, or sample without solve '
+                        'mode (see "Solve mode" in the README)')
 
 
 def _solve(raw, cfg, warnings, notes):
@@ -921,8 +928,8 @@ def _solve(raw, cfg, warnings, notes):
     The support of u is [v - k sigma_lo, v + k sigma_hi], v the datum in the likelihood space, sigma_lo and sigma_hi
     its effective sigma on each side and k = solve.range_sigma: k = 6 drops only points whose term is below -18. A
     limit keeps only its allowed side, [v - k sigma, v] (upper) or [v, v + k sigma] (lower), with a warning. Warns
-    too when the support reaches the log10 floor of the observable, and for Rp along log_f_atm when the bare-core
-    plateau lies inside it (_bare_core_warning).
+    too when the support reaches the log10 floor of the observable; for Rp along log_f_atm with the bare-core
+    plateau inside it, notes the plateau branch, or warns without it (_bare_core_warning).
 
     Inputs:
         - raw: the raw [solve] table [dict]
@@ -989,7 +996,7 @@ def _solve(raw, cfg, warnings, notes):
                         'value cannot be inverted; lower solve.range_sigma or the floor')
     # With Rp_fixed the radius is constant: no bare-core plateau
     if name == 'Rp' and param == 'log_f_atm' and cfg['params']['Rp_fixed']['value'] is None:
-        _bare_core_warning(cfg, o, bounds, warnings)
+        _bare_core_warning(cfg, o, bounds, s['plateau'], warnings, notes)
     reg = OBSERVABLES[name]
     log = o['space'] == 'log10'
     s.update(param = param, observable = name, index = cfg['free'].index(param), name = u_name(name),
@@ -1085,8 +1092,8 @@ def _resolution(raw, model):
     The study runs test points at every (n_steps, n_atmodeller) cell of a grid and compares each cell with the
     finest one, in units of the measurement sigmas (see "Choosing n_steps and n_atmodeller" in the README). Every
     n_steps of the grid is >= 1 and at most MAX_N_STEPS unless model.allow_large_n_steps; every n_atmodeller >= 0;
-    points >= 1; source one of RESOLUTION_SOURCES or 'chain:RUN_DIR'; tol, dlogl_tol, max_eval_seconds and
-    shift_tol > 0; perturb >= 0.
+    points >= 1; source one of RESOLUTION_SOURCES or 'chain:RUN_DIR'; tol, dlogl_tol, max_eval_seconds,
+    shift_tol and post_tol > 0; perturb >= 0.
 
     Inputs:
         - raw: the raw [resolution] table [dict]
@@ -1107,7 +1114,7 @@ def _resolution(raw, model):
                                                 r['source'].startswith('chain:')):
         raise ConfigError(f"resolution.source must be one of {', '.join(map(repr, RESOLUTION_SOURCES))} or "
                           f"'chain:RUN_DIR', got {r['source']!r}")
-    for key in ('tol', 'dlogl_tol', 'max_eval_seconds', 'shift_tol'):
+    for key in ('tol', 'dlogl_tol', 'max_eval_seconds', 'shift_tol', 'post_tol'):
         _float(r[key], f'resolution.{key}', positive = True)
     _float(r['perturb'], 'resolution.perturb', nonnegative = True)
     return r

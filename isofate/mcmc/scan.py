@@ -15,9 +15,10 @@ The scan is in the physical parameters, also in solve mode (the model at fixed v
 it also checks the assumptions solve mode rests on. Solve mode inverts T(observable) along the solved parameter
 P, and it assumes one root per bracket: where T is not monotonic in P inside the u range, some values of u have several
 roots, and solve mode finds only one of them while the density is a sum over them all. Where T is constant over
-a stretch of P (a plateau, e.g. the bare-core radius of a stripped planet), that stretch has no u of its own, so
-solve mode cannot sample it and leaves out its posterior mass. solve_report finds both, along a scan with the
-solved parameter as an axis.
+a stretch of P (a plateau, e.g. the bare-core radius of a stripped planet), that stretch has no u of its own:
+the plateau branch of solve mode (solve.plateau) samples a plateau of stripped planets through the u that have no
+root, and solve mode leaves out the posterior mass of any other. solve_report finds both, along a scan with the
+solved parameter as an axis, and says which plateaus are of stripped planets.
 
 The parent process never imports the coupled model; the evaluations run in a WorkerPool (model.eval_task).
 '''
@@ -152,11 +153,12 @@ def _monotonic_lines(p, T, lo, hi):
     return stretches, turns
 
 
-def _plateau_lines(p, T, lo, hi, eps):
+def _plateau_lines(p, T, lo, hi, eps, stripped = None):
     '''
     Plateaus of one line T(p) (p ascending) inside the u range [lo, hi]: runs of at least two neighbouring grid
     points with the same T (within eps), e.g. the bare-core radius of a stripped planet. Returns a list of
-    (p_first, p_last, T).
+    (p_first, p_last, T, whether every point of it is stripped); stripped: the exhausted flags of the line (None:
+    not known, False).
     '''
     out, k = [], 0
     while k < len(T) - 1:
@@ -164,7 +166,7 @@ def _plateau_lines(p, T, lo, hi, eps):
         while m + 1 < len(T) and np.isfinite(T[k]) and abs(T[m + 1] - T[k]) <= eps:
             m += 1
         if m > k and lo <= T[k] <= hi:
-            out.append((p[k], p[m], float(T[k])))
+            out.append((p[k], p[m], float(T[k]), stripped is not None and bool(np.all(stripped[k:m + 1]))))
         k = m + 1
     return out
 
@@ -193,20 +195,24 @@ def solve_report(cfg, data):
     if P not in axes:
         return [f'solve check: scan {P} (--x {P}=LO:HI:N) to see whether {O} is monotonic in it inside the u range']
     # T itself (g with target 0), in the shape of the grid
-    T = search.g_of(data['blobs'], O, cfg['observables'][O], 0.0).reshape(tuple(int(n) for n in data['shape']))
+    shape = tuple(int(n) for n in data['shape'])
+    T = search.g_of(data['blobs'], O, cfg['observables'][O], 0.0).reshape(shape)
+    S = (np.asarray(data['blobs']['exhausted']) == 1).reshape(shape) # stripped
     if T.ndim == 1:
-        lines, p, other = [T], np.asarray(data['x'], dtype = float), None
+        lines, strips, p, other = [T], [S], np.asarray(data['x'], dtype = float), None
     elif P == str(data['x_name']): # rows: y fixed
-        lines, p, other = list(T), np.asarray(data['x'], dtype = float), (str(data['y_name']), data['y'])
+        lines, strips, p, other = list(T), list(S), np.asarray(data['x'], dtype = float), (str(data['y_name']),
+                                                                                           data['y'])
     else: # columns: x fixed
-        lines, p, other = list(T.T), np.asarray(data['y'], dtype = float), (str(data['x_name']), data['x'])
+        lines, strips, p, other = list(T.T), list(S.T), np.asarray(data['y'], dtype = float), (str(data['x_name']),
+                                                                                               data['x'])
     space = 'log10 ' if cfg['observables'][O]['space'] == 'log10' else ''
     eps = 1e-9*likelihood.sigma_eff(cfg['observables'][O]) # neighbours closer than this count as equal
     out, bad, flat = [], 0, []
     for i, line in enumerate(lines):
         stretches, turns = _monotonic_lines(p, line, lo, hi)
         where = f' at {other[0]} = {other[1][i]:.4g}' if other else ''
-        flat += [(where, a, b, v) for a, b, v in _plateau_lines(p, line, lo, hi, eps)]
+        flat += [(where, a, b, v, bare) for a, b, v, bare in _plateau_lines(p, line, lo, hi, eps, strips[i])]
         if not stretches:
             out.append(f'  {space}{O} never inside the u range [{lo:.4g}, {hi:.4g}]{where}')
         elif len(stretches) > 1 or turns:
@@ -219,11 +225,18 @@ def solve_report(cfg, data):
                f'{bad} of {len(lines)} line(s) are not monotonic: there solve mode finds one of several roots, while '
                'the density is a sum over them (use a finer scan to check, or another solve.param/observable)'))
     if flat:
+        if not sv.get('plateau', False):
+            what = f'with solve.plateau = false solve mode leaves out the posterior mass of that part of {P}'
+        elif all(bare for *_, bare in flat):
+            what = f'the plateau branch samples that part of {P} through the u that have no root (stripped planets)'
+        else: # e.g. x = 1 of planets that keep an atmosphere: the branch covers stripped planets only
+            what = (f'solve mode leaves out the posterior mass of the part of {P} where the planets keep an '
+                    'atmosphere (the plateau branch covers stripped planets only)')
         head += (f'; but {O} is constant (a plateau) over part of {P} on {len({w for w, *_ in flat})} of {len(lines)} '
-                 f'line(s), inside the u range: T cannot be inverted there, so solve mode leaves out the posterior '
-                 f'mass of that part of {P} (e.g. a stripped planet at the bare-core radius; see "Solve mode" in '
-                 'the README)')
-        out = [f'  plateau{w}: {space}{O} = {v:.6g} for {P} {a:.5g} to {b:.5g}' for w, a, b, v in flat] + out
+                 f'line(s), inside the u range (e.g. a stripped planet at the bare-core radius): T cannot be inverted '
+                 f'there, and {what} (see "Solve mode" in the README)')
+        out = [f"  plateau{w}: {space}{O} = {v:.6g} for {P} {a:.5g} to {b:.5g}{' (stripped)' if bare else ''}"
+               for w, a, b, v, bare in flat] + out
     return [head] + [line for line in out if bad or flat or 'never' in line][:20]
 
 

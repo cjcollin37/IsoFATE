@@ -17,7 +17,7 @@ import sys
 import numpy as np
 import pytest
 
-from isofate.mcmc import config, likelihood, model, resolution
+from isofate.mcmc import config, likelihood, model, resolution, sampler
 from isofate.mcmc.resolution import distance, relative_change
 
 EXAMPLE = os.path.join(config.CONFIG_DIR, 'lhs1140b.toml')
@@ -460,3 +460,188 @@ def test_table_prints_each_line_of_a_warning(tmp_path):
     lines = table.splitlines()
     assert any(line.startswith('      - no sign change: g > 0 at both ends in') for line in lines), table
     assert any(line.startswith('      Try another sampler.bisect_observable') for line in lines)
+
+
+###_____The posterior test_____###
+
+def test_weighted_quantiles():
+    '''
+    Checks resolution.weighted_quantiles, one set per row of weights, against np.interp over the samples of positive
+    weight at their mid-weight points: with zero weights, NaN values and ties, and beyond the outermost samples. A row
+    without weight gives NaN.
+    '''
+    rng = np.random.default_rng(1)
+    q = np.array([0.0, 0.01, 0.16, 0.5, 0.84, 0.99, 1.0])
+    for trial in range(200):
+        n = int(rng.integers(1, 30))
+        x = rng.normal(size = n)
+        if trial % 3 == 0:
+            x[rng.integers(0, n)] = math.nan
+        if trial % 5 == 0:
+            x = np.round(x, 1) # ties
+        w = rng.exponential(size = (5, n))*(rng.random((5, n)) > 0.4)
+        got = resolution.weighted_quantiles(x, w, q)
+        for r in range(len(w)):
+            keep = (w[r] > 0) & ~np.isnan(x)
+            if not keep.any():
+                assert np.isnan(got[r]).all()
+                continue
+            order = np.argsort(x[keep], kind = 'stable')
+            xs, ws = x[keep][order], w[r][keep][order]
+            assert got[r] == pytest.approx(np.interp(q, (np.cumsum(ws) - ws/2)/ws.sum(), xs), abs = 1e-12)
+    assert resolution.weighted_quantiles([3.0, 1.0, 2.0], [1, 1, 1], [0.5]) == pytest.approx([2.0])
+    assert list(resolution.weighted_quantiles([3.0, 1.0, 2.0], [0, 1, 0], [0.1, 0.9])) == [1.0, 1.0]
+
+
+def test_posterior_shifts_and_verdicts():
+    '''
+    Checks the shift statistic of the posterior test on 400 draws of a unit normal, reweighted to normals shifted by
+    0, 0.02, 0.5 and 3 sigma: the identical weighting has no shift, the 0.02 one passes post_tol = 0.2 with its
+    whole 90% bootstrap range, 0.5 sigma fails, and at 3 sigma the weights collapse (ESS 2%), which fails against a
+    reference that does not collapse and is inconclusive when the reference collapses too. ESS values on either
+    side of the collapse limit but close to it are inconclusive, not a failure. A quantity without a width at the
+    reference (one distinct draw) does not count: nothing is left to compare, so the verdict is inconclusive. One
+    defined at the reference but not at a cell is an infinite shift, which stays infinite in the bootstrap range.
+    '''
+    rng = np.random.default_rng(2)
+    x = rng.normal(size = 400)
+    deltas = [0.0, 0.0, 0.02, 0.5, 3.0, 3.0]
+    values = np.stack([x[:, None]]*len(deltas))
+    log_r = np.array([-(x - d)**2/2 + x**2/2 for d in deltas])
+    res = resolution.posterior_shifts(values, log_r, np.ones(400), 0, np.random.default_rng(0))
+    verdicts = [resolution.post_verdict(res, e, 0, 0.2) for e in range(len(deltas))]
+    assert verdicts == ['reference', 'pass', 'pass', 'fail', 'fail', 'fail']
+    assert res['worst'][1] == res['hi'][1] == 0 and res['ess'][1] == pytest.approx(1.0)
+    assert res['hi'][2] < 0.1 and 0.35 < res['worst'][3] < 0.65 and res['lo'][3] > 0.2
+    assert res['ess'][4] < resolution.POST_ESS_MIN < 2*resolution.POST_ESS_MIN < res['ess'][3]
+    # against a collapsed reference: the other collapsed weighting is inconclusive, a sound one fails
+    res = resolution.posterior_shifts(values, log_r, np.ones(400), 4, np.random.default_rng(0))
+    assert resolution.post_verdict(res, 5, 4, 0.2) == 'inconclusive'
+    assert resolution.post_verdict(res, 0, 4, 0.2) == 'fail'
+    # ESS just below and just above the limit: too close to tell
+    near = dict(res, ess = np.array([0.31, 0.29, 1.0, 1.0, 1.0, 1.0]), worst = np.zeros(6), lo = np.zeros(6),
+                hi = np.zeros(6))
+    assert resolution.post_verdict(near, 1, 0, 0.2) == resolution.post_verdict(near, 0, 1, 0.2) == 'inconclusive'
+    # one distinct draw: no width at the reference, nothing counts
+    one = resolution.posterior_shifts(np.array([[[1.0]], [[1.0 + 1e-9]]]), np.zeros((2, 1)), np.array([5.0]), 0,
+                                      np.random.default_rng(0))
+    assert not one['usable'][0] and math.isnan(one['worst'][1])
+    assert resolution.post_verdict(one, 1, 0, 0.2) == 'inconclusive'
+    # defined at the reference only: an infinite shift, inf in the range too
+    both = np.stack([np.column_stack([x, x]), np.column_stack([x, np.full(400, math.nan)])])
+    gone = resolution.posterior_shifts(both, np.zeros((2, 400)), np.ones(400), 0, np.random.default_rng(0))
+    assert gone['worst'][1] == gone['lo'][1] == gone['hi'][1] == math.inf
+    assert resolution.post_verdict(gone, 1, 0, 0.2) == 'fail'
+
+
+def fake_run(run_dir, cfg, chain, log_prob, blobs = None, discard = None):
+    '''
+    Writes a fake MCMC run directory: chain.npz with the chain, log_prob and blobs, the run's config.json and,
+    with discard, a summary.json with that burn-in
+    '''
+    os.makedirs(run_dir)
+    arrays = {'chain': chain, 'log_prob': log_prob, 'accepted': np.ones(chain.shape[1])}
+    if blobs is not None:
+        arrays['blobs'] = blobs
+    np.savez_compressed(os.path.join(run_dir, 'chain.npz'), **arrays)
+    config.save_resolved(cfg, os.path.join(run_dir, 'config.json'))
+    if discard is not None:
+        with open(os.path.join(run_dir, 'summary.json'), 'w') as f:
+            json.dump({'discard': discard, 'thin': 1}, f)
+
+
+def test_chain_draws_and_their_densities(tmp_path):
+    '''
+    Checks the draws of a chain source and the run's density at them. A walker that stays put is one point drawn as
+    often as it was hit. A solve-mode run studied at fixed physical parameters gives the points P* and the physical
+    density log_prior + log_like (without ln|J|); a run without solve mode studied in solve mode has no density (its
+    chain lacks ln|dP*/du|), with the reason. Settings that shape the posterior and differ from the run's get a
+    warning, a free parameter's starting value, the resolution and a fixed parameter's bounds do not. A run that
+    leaves out the stripped planets of a plateau (solve mode without the branch) gets a warning of its own, since
+    reweighting cannot see the mass it lacks.
+    '''
+    physical = toy_cfg(tmp_path)
+    solved = toy_cfg(tmp_path, 'solve.param="log_f_atm"', 'solve.observable="Rp"')
+    rng = np.random.default_rng(4)
+    # a solve-mode chain of 20 steps x 4 walkers (u = Rp), walker 0 stuck after the burn-in of 10 steps
+    chain = np.array([1.73, 5.6, 5e9]) + np.array([0.01, 0.1, 2e8])*rng.standard_normal((20, 4, 3))
+    chain[10:, 0] = chain[10, 0]
+    blobs = np.empty((20, 4), dtype = model.blob_dtype())
+    blobs[...] = np.array(model.NAN_BLOB, dtype = model.blob_dtype())
+    blobs['solve_value'] = -2.8 + 0.1*rng.standard_normal((20, 4))
+    blobs['solve_value'][10:, 0] = blobs['solve_value'][10, 0]
+    blobs['log_prior'], blobs['log_like'], blobs['log_jac'] = -1.0, -chain[..., 0], 0.5 # the stuck walker's too
+    log_prob = blobs['log_prior'] + blobs['log_like'] + blobs['log_jac']
+    run_dir = str(tmp_path/'solved_run')
+    fake_run(run_dir, solved, chain, log_prob, blobs, discard = 10)
+    solved_run = (chain, log_prob, blobs) # for the run without the plateau branch below
+    warnings = []
+    thetas, sel = resolution._chain_points(run_dir, physical, 40, np.random.default_rng(0), warnings)
+    assert sel['chain_draws'] == 40 and sel['chain_samples'] == 40 and len(thetas) == 31 and not warnings
+    assert sorted(sel['chain_counts'])[-1] == 10 and sel['chain_counts'].sum() == 40
+    after = blobs[10:].reshape(-1)
+    for theta, lp, b in zip(thetas, sel['chain_lp'], sel['chain_blobs']):
+        assert theta[0] == b['solve_value'] and b['solve_value'] in after['solve_value'] # P* in place of u
+        assert lp == pytest.approx(b['log_prior'] + b['log_like']) # the physical density, without ln|J|
+    assert sel['chain_n_steps'] == solved['model']['n_steps'] and sel['chain_lp_note'] == ''
+
+    # a run without solve mode, studied in solve mode: no density
+    blobs = np.empty((20, 4), dtype = model.blob_dtype())
+    blobs[...] = np.array(model.NAN_BLOB, dtype = model.blob_dtype())
+    blobs['Rp'] = 1.73 + 0.01*rng.standard_normal((20, 4))
+    chain = np.array([-2.8, 5.6, 5e9]) + np.array([0.1, 0.1, 2e8])*rng.standard_normal((20, 4, 3))
+    run_dir = str(tmp_path/'physical_run')
+    fake_run(run_dir, physical, chain, np.zeros((20, 4)), blobs, discard = 10)
+    thetas, sel = resolution._chain_points(run_dir, solved, 40, np.random.default_rng(0), [], solving = True)
+    assert np.isnan(sel['chain_lp']).all() and '--no-solve' in sel['chain_lp_note']
+    assert set(thetas[:, 0]) <= set(blobs['Rp'][10:].reshape(-1)) # u = Rp of the blobs
+
+    # what counts as a change of the posterior's settings: not a free parameter's starting value, the resolution or
+    # a fixed parameter's unused bounds; whether the stripped planets of a plateau are left out does
+    changes = resolution._posterior_changes
+    assert changes(physical, toy_cfg(tmp_path, 'observables.Rp.sigma=0.03')) == ['observables.Rp']
+    assert changes(physical, toy_cfg(tmp_path, 'params.F_final.value=0.2')) == ['params.F_final']
+    assert changes(physical, toy_cfg(tmp_path, 'params.Mp.value=6.0', 'model.n_steps=30000')) == []
+    assert changes(physical, toy_cfg(tmp_path, 'params.albedo.bounds=[0.0, 0.5]')) == []
+    no_branch = toy_cfg(tmp_path, 'solve.param="log_f_atm"', 'solve.observable="Rp"', 'solve.plateau=false')
+    assert changes(no_branch, physical) == changes(no_branch, solved) == ['solve.plateau']
+    assert changes(solved, physical) == []
+    warnings = []
+    fake_run(str(tmp_path/'no_branch_run'), no_branch, *solved_run, discard = 10)
+    resolution._chain_points(str(tmp_path/'no_branch_run'), physical, 40, np.random.default_rng(0), warnings)
+    assert len(warnings) == 1 and 'cannot see that mass at all' in warnings[0]
+
+
+def test_posterior_test_on_a_toy_chain(tmp_path, capsys):
+    '''
+    Checks the posterior test on 60 draws of a toy MCMC run at 2e4/100 (its resolution bias makes Rp 5% larger at
+    1e4 steps than at 2e4, and n_atmodeller barely matters). Re-run at the run's own cell the draws give the chain's
+    lp back exactly, so the weights there are the plain draws (ESS 100%) and that cell passes; the 1e4 cells move the
+    posterior by far more than post_tol and fail; the run itself passes. The table, the final lines, results.npz and
+    recommendation.json report it.
+    '''
+    cfg = toy_cfg(tmp_path, 'parallel.workers=2', 'sampler.nwalkers=16', 'sampler.max_steps=80', 'sampler.tracks=0',
+                  'model.n_steps=20000', 'model.n_atmodeller=100', 'resolution.perturb=0')
+    run_dir = sampler.run_mcmc(cfg, workers = 2, make_plots = False)
+    capsys.readouterr()
+    out = resolution.run_resolution(cfg, grid = {'n_steps': [10000, 20000], 'n_atmodeller': [100, 10]}, points = 60,
+                                    source = f'chain:{run_dir}', workers = 2)
+    printed = capsys.readouterr().out
+    rec = json.load(open(os.path.join(out, 'recommendation.json')))
+    post = rec['posterior_test']
+    assert post['available'] and post['draws'] == 60 and post['identity'] == 0.0
+    cells = {(c['n_steps'], c['n_atmodeller']): c for c in post['cells']}
+    assert cells[20000, 10]['verdict'] == 'reference' and cells[20000, 100]['verdict'] == 'stable'
+    assert cells[20000, 100]['ess'] == pytest.approx(1.0) and cells[20000, 100]['shift_90'][1] < 0.2
+    assert cells[10000, 100]['verdict'] == cells[10000, 10]['verdict'] == 'fail'
+    assert post['run']['verdict'] == 'pass' and post['run']['n_steps'] == 20000
+    assert (post['recommended']['n_steps'], post['recommended']['n_atmodeller']) in ((20000, 100), (20000, 10))
+    assert rec['recommended_posterior'] == post['recommended']
+    assert post['recommended']['verdict'] in ('stable', 'reference') # the posterior test's, not the per-point one
+    table = open(os.path.join(out, 'table.txt')).read()
+    assert 'POSTERIOR TEST' in table and 'POSTERIOR-BASED RECOMMENDATION' in table and 'the run itself' in table
+    assert 'Posterior-based: --set model.n_steps=20000' in printed and 'The run itself: PASSES' in printed
+    with np.load(os.path.join(out, 'results.npz')) as r:
+        assert r['post_shift'].shape == (5, 4, 3) and list(r['post_names']) == ['log_f_atm', 'Mp', 'age', 'Rp']
+    with np.load(os.path.join(out, 'points.npz')) as p:
+        assert p['chain_counts'].sum() == 60 and len(p['chain_counts']) == len(p['theta'])

@@ -237,16 +237,20 @@ from conservation. The legacy `escape_H_He` and `escape_He_H` are ill-defined wh
 - `warm_start = true`: start each solve from a table fitted to earlier solves;
   `refit_steps = [25, 50, 100, 200, 400]`: refit it to the chain after these steps (`[]`: never).
 - `derivative = "forward"`: the Jacobian's finite difference, "forward" (one more model run) or "central" (two).
+- `plateau = true`: sample the stripped planets of a plateau of T (Rp = the bare core) through the u that have
+  no root (see "Solve mode"); false leaves them out, as runs from before the option did.
 
 ### [resolution]
 
 - `n_steps = [10000, 30000, 100000, 300000, 1000000]` and `n_atmodeller = [1000, 300, 100, 30, 10, 3, 1]`: the
   default grid (`--grid quick` is 1e4–3e5 × 1000, 100, 10).
 - `points = 6` test points from `source = "auto"`: "solve" in solve mode, "bisect" when init = "bisect", else
-  "prescan"; or "prior", or "chain:RUN_DIR" (posterior samples of a run).
+  "prescan"; or "prior", or "chain:RUN_DIR" (posterior draws of a run, which adds the posterior test).
 - `tol = 0.1`, `dlogl_tol = 0.5`: a cell passes when every observable is within tol × σ and log L within dlogl_tol.
 - `perturb = 1e-6`: the step of the noise-floor runs (of the prior width). `shift_tol = 1e-3`: the largest
   equivalent shift (of the prior width) of the second recommendation.
+- `post_tol = 0.2`: the posterior test (source "chain:RUN_DIR") passes a cell whose reweighted posterior quantiles
+  stay within post_tol of the reference posterior's 68 % half-width.
 - `max_eval_seconds = 300.0`: skip cells whose estimated cost per model run is above this.
 
 ## Choosing n_steps and n_atmodeller
@@ -291,12 +295,30 @@ RECOMMENDATION, the noise floor, the warnings and the details; `resolution_heatm
 per point and the test-point selection) and its time, good to 2×. In solve mode each evaluation is a solve of about
 15 model runs, so keep the grid small; cells above `max_eval_seconds` are skipped. Rerun it for a new observable.
 
-**Re-check on the posterior**, on the cells in question, with 30 or more of its samples (on LHS 1140 b, 6 passed a
-cell that 30 failed), and read a failure as the size of a reweighting, not a verdict (see "Caveats"):
+**The posterior test.** The per-point rule is strict: one test point in a tail can fail a cell whose posterior
+does not change (on LHS 1140 b, 1e5/100 failed at one of 30 posterior samples). So after a first run, test the
+cells in question on its posterior:
 
 ```bash
-python -m isofate.mcmc resolution $C --source chain:RUN_DIR --points 30 --n-steps 1e5,3e5,1e6 --n-atmodeller 100
+python -m isofate.mcmc resolution $C --source chain:RUN_DIR --points 100 --set resolution.perturb=0 \
+    --n-steps 1e5,3e5,1e6 --n-atmodeller 100
 ```
+
+The draws are reweighted to each cell by exp(lp(cell) − lp(run)), the ratio of the two posteriors, and the 16, 50
+and 84 % quantiles of the free parameters and the fitted observables are compared with the reference cell's, in
+units of its 68 % half-width. A cell passes when the 90 % bootstrap range of its worst shift lies at or below
+`post_tol`. It fails when the range lies above, when a quantity is defined at only one of the cell and the
+reference, or when the weights collapse (ESS below 30 % of the plain draws') at one of them while the other keeps
+60 % or more. It is inconclusive otherwise: more draws would tell. A quantity that the reference gives no width
+(defined at fewer than 10 points, or the same at all) does not count, and a warning names it. table.txt adds the
+POSTERIOR-BASED RECOMMENDATION and the verdict on the run itself, the answer to whether its resolution was enough.
+`perturb = 0` skips the noise-floor runs, half the cost. Keep the run's own cell in the grid: the draws re-run
+there must give the chain's lp back, else the config or the model changed since the run (a warning says so).
+Reweighting checks the posterior only where the run's draws are. A mode that moved, or one the run's tails reach,
+shows up as a shift or as collapsed weights, but mass that a cell has where the run has no draws is not seen at
+all. The warnings name such a case they know of: a run sampled without the plateau branch of solve mode, which
+lacks the stripped planets. On the 240 LHS 1140 b draws reweighted from 1e5/100 to 3e5/100, the worst shift is
+0.11 (Rp's 16 % quantile, 90 % range 0.03–0.14): a pass.
 
 ## Starting the walkers
 
@@ -353,7 +375,8 @@ test on a thin toy ridge misses a brute-force grid posterior by 6–14 standard 
   (their ln|J| differ by 0.01 on LHS 1140 b). A slope of 0, of the wrong sign or undefined gives lp = −inf.
 - u stays within `range_sigma` (6) sigmas of the datum on each side, which drops only points whose O term is below
   −18 and keeps the sampler off the plateaus of T outside it (x = 1, the 1e-15 floor). A (u, φ) with no root in P's
-  prior is outside the prior. Solve mode is meant for detections: on a limit the range is one-sided.
+  prior is outside the prior, unless the plateau branch (below) gives it a stripped planet. Solve mode is meant for
+  detections: on a limit the range is one-sided.
 - **One root per bracket.** The root finder returns one root; if O(P) crosses u several times, the density should
   sum over them. A `scan` along the solved parameter reports where T is not monotonic inside the u range.
 - **Warm starts.** A cold solve from both prior bounds takes about 15 model runs. The parent fits a table of P*
@@ -365,13 +388,43 @@ test on a thin toy ridge misses a brute-force grid posterior by 6–14 standard 
   and `compare` report physical parameters, `corner_sampled.png` shows (u, φ), and the MAP maximizes the sampled
   density, ln|J| included. `check $C` prints one solve run by run.
 
-**Where it fails: plateaus.** Where O does not change with P over a stretch of P's prior, the whole stretch maps to
-a single u and gets no mass: that part of the posterior is silently left out. The common case is Rp along log_f_atm
-on a planet that can lose its atmosphere, since every log_f_atm below the stripping edge gives the bare-core
-radius. On TOI-406 b (Rp 1.55 ± 0.06 R⊕, Mp 4.57 ± 0.70 M⊕) 82 % of the plain posterior were stripped planets at
-that radius, and solve mode on Rp returned only planets that keep an atmosphere. The config warns about this case,
-`check` and `scan` report plateaus, and such a planet needs plain sampling (`--set 'solve.param=""'`). On
-LHS 1140 b nothing is lost: the plateaus of x lie outside the u range, and a stripped planet has no wind.
+**Plateaus.** Where O does not change with P over a stretch of P's prior, that stretch has a single T and no u of
+its own. The common case is Rp along log_f_atm on a planet that can lose its atmosphere, since every log_f_atm
+below the stripping edge gives the bare-core radius. On TOI-406 b (Rp 1.55 ± 0.06 R⊕, Mp 4.57 ± 0.70 M⊕) 82 % of
+the plain posterior were stripped planets at that radius, and solve mode on Rp without the plateau branch returned
+only planets that keep an atmosphere.
+
+The plateau branch (`plateau = true`, the default) gives the stripped planets the u that have no root. It applies
+when the search finds no root, the planet is stripped at one prior bound P_s of P (T_s = T there), and T is finite
+at both bounds. Two stretches of the u support serve it, in this order: the u beyond T_o, the T at the other bound
+P_o (above it when T rises away from the plateau), and the u beyond T_s (Rp below the bare core), each from its end
+next to T to the edge of the support. With L their total length and d the distance of u into them, P = P_s +
+(d/L)(P_o − P_s), so |∂P/∂u| = |P_o − P_s|/L. The model runs at that P, and the point counts, with lp = log_prior +
+ln|∂P/∂u| + log_like, only if the planet there is stripped and has T = T_s. Any other P has a root of its own, so
+the point is outside the prior (status 1). Each P is thus reached once, and the posterior over (P, φ) stays the
+same. Each stretch starts tol × σ from its T, where the search converges at the bound instead. A plateau whose T
+lies outside the u support gets nothing, like any model value there. With both bounds stripped, the u below and
+above the plateau map onto the whole prior. On TOI-406 b, T_o (about 2.8 R⊕ at log_f_atm = −1.3) lies above the
+u support, so only the second stretch is used: at Mp = 4.57 M⊕ it runs from the bare core, 1.462 R⊕, down to
+1.19 R⊕ and maps onto log_f_atm from −5 to −1.3, |∂P/∂u| = 13.6 dex/R⊕.
+
+**Mixing between the branches.** The stripped planets and the planets that keep an atmosphere lie in separate
+stretches of u. Where T_o is inside the u support they touch, which is why that stretch comes first; otherwise
+the jump of T at the stripping edge lies between them: 0.005 R⊕ (0.09 σ) on TOI-406 b at Mp = 4.6 M⊕ and 6.8 Gyr,
+but 10 % of the radius on the toy at 1e4 steps. Walkers cross only through moves that land in the other stretch,
+and τ of the sampled coordinates does not see how often they do. So the summary counts each walker's crossings
+after the burn-in (`solve.branches` in summary.json) and warns below 20. Where they are rare, run longer or check
+the split with plain sampling. A u inside the jump itself has no point at all, and its search narrows the bracket
+on the jump to 1e-9 of the prior width, up to `max_evals` model runs.
+
+The branch adds one model run to a u without a root (two when the search did not evaluate both bounds). A point of
+the branch has its P in `solve_value`, ln|∂P/∂u| in `log_jac` and `exhausted` = 1; the warm-start table leaves it
+out, and `corner_sampled.png` shows it at its u, not at its Rp. `plateau = false` gives the old behaviour, which
+leaves the stripped planets out (the config then warns when the bare core lies inside the u range). A run from
+before the option existed, whose `config.json` lacks it, keeps false, so its chain resumes with the density it was
+sampled with. `check` and `scan` report plateaus and whether the branch covers them (only plateaus of stripped
+planets), and `check` prints the branch's point for a u without a root. On LHS 1140 b nothing is lost, with or
+without the branch: the plateaus of x lie outside the u range, and a stripped planet has no wind.
 
 ## Running, resuming and convergence
 
@@ -486,13 +539,14 @@ above its measurement, since a heavier core is larger. The age is barely constra
 
 ## Caveats
 
-- **The resolution study is stricter than the posterior needs.** A cell passes only when every test point does, so
-  one tail point can fail it while the posterior does not change: on LHS 1140 b, 1e5/100 failed at one of 30
-  posterior samples (eps 0.91, |Δ log L| = 1.1), yet re-solving 240 posterior samples at 3e5/100 and reweighting
-  them by exp(lp_fine − lp) moved every marginal by far less than its error (eps 0.496 to 0.493, effective sample
-  size 239 of 240). The tool does not do that reweighting itself.
-- **Solve mode** leaves out a plateau of its observable (TOI-406 b) and keeps one root per bracket (see "Solve
-  mode"). Its ln|J| carries a numerical error of about 0.01–0.02, far below the Monte Carlo error.
+- **The resolution study's per-point rule is stricter than the posterior needs.** A cell passes only when every
+  test point does, so one tail point can fail it while the posterior does not change: on LHS 1140 b, 1e5/100
+  failed at one of 30 posterior samples (eps 0.91, |Δ log L| = 1.1). The posterior test on draws of a run settles
+  it (see "Choosing n_steps and n_atmodeller").
+- **Solve mode** keeps one root per bracket, and samples a plateau of its observable inside the u range only
+  through the plateau branch, which needs a planet stripped at a bound of P's prior (the bare core of TOI-406 b);
+  with `plateau = false`, as in runs from before that option, it leaves every such plateau out (see "Solve mode").
+  Its ln|J| carries a numerical error of about 0.01–0.02, far below the Monte Carlo error.
 - **The stopping rule** misses slow components, and its τ is biased low (see "Running, resuming and convergence").
 - **μ is the mean mass per atom**, not per molecule (escape_kernel.py), so R_atm = 9kT/(μg) is about 1.8× larger
   than with the molecular μ of protosolar H₂ (13 % at the end of a typical LHS 1140 b run). It may be intended.

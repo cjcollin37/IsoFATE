@@ -259,10 +259,10 @@ use = false
 # likelihood space: log10 for space = "log10"), u_<observable> in place of param in theta; each evaluation finds
 # param inside its prior that gives u (a root search, about 5-15 model runs) and adds the exact Jacobian
 # |d param/du| to the density, so the posterior over the physical parameters is unchanged. The summary,
-# corner_params.png and the tracks report param (from the blob solve_value); corner_sampled.png shows u. Solve
-# mode cannot sample a plateau of the observable inside the u range: with Rp along log_f_atm, stripped planets all
-# have the bare-core radius, and that part of the posterior is left out (the config warns; see "Solve mode" in the
-# README).
+# corner_params.png and the tracks report param (from the blob solve_value); corner_sampled.png shows u. A
+# plateau of the observable inside the u range has no u of its own: with Rp along log_f_atm, stripped planets all
+# have the bare-core radius. The plateau branch (plateau below) samples them through the u that have no root;
+# without it that part of the posterior is left out (see "Solve mode" in the README).
 [solve]
 param = ""                    # the free parameter to solve for, e.g. "log_f_atm"; "" (default): off
 observable = "Rp"             # the active, non-input observable whose model value is sampled (a detection)
@@ -276,6 +276,9 @@ refit_steps = [25, 50, 100, 200, 400]  # refit that table to the chain's solved 
 derivative = "forward"        # dT/dP for the Jacobian: "forward" (1 model run at P* + h; 2 where T is undefined
                               # there) or "central" (2 runs; its ln|J| differs from forward by about 0.01, within
                               # the numerical noise of either)
+plateau = true                # the plateau branch: a u with no root maps linearly onto param's prior and counts
+                              # when the planet is stripped there, on the plateau (Rp = the bare core), at 1 model
+                              # run more; false leaves the stripped planets out (as in runs from before this option)
 
 [sampler]
 nwalkers = "auto"             # or an even number >= 2*ndim; auto: max(4 ndim, 16) rounded up to a multiple of
@@ -338,4 +341,6 @@ tol = 0.1                     # pass: every observable within tol*sigma of the f
 dlogl_tol = 0.5               # ... and the log-likelihood within this
 perturb = 1e-6                # relative step (of the box width) for the noise-floor estimate
 shift_tol = 1e-3              # second recommendation: errors equivalent to a parameter shift <= shift_tol*(prior width)
+post_tol = 0.2                # source = "chain:RUN_DIR": the posterior test passes a cell whose reweighted posterior
+                              # quantiles stay within post_tol of the reference's 68% half-width
 max_eval_seconds = 300.0      # skip cells whose estimated cost per evaluation is above this

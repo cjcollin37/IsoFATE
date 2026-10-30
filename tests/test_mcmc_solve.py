@@ -817,16 +817,27 @@ def toy_file(tmp_path, name = 'toy', solve_on = True, **sampler_options):
 def test_bare_core_plateau(tmp_path, capsys):
     '''
     Checks the bare-core plateau: a stripped planet has Rp = the bare core for every log_f_atm below the stripping
-    edge, a plateau that solve mode cannot represent. The config warns when it lies inside the u support (TOI-406 b
-    solved on Rp; not without solve mode, nor LHS 1140 b, which is solved on the outflow), solve.plateau finds one
-    in a search, and check points it out.
+    edge, a plateau that no u stands for. When it lies inside the u support (TOI-406 b solved on Rp; not without
+    solve mode, nor LHS 1140 b, which is solved on the outflow), the config notes that the plateau branch samples
+    it, and warns instead with solve.plateau = false. solve.plateau finds a plateau in a search, and check points it
+    out, with the config's note.
     '''
     toi = os.path.join(config.CONFIG_DIR, 'toi406b.toml')
-    cfg = config.load_config(toi, ['solve.param="log_f_atm"', f'output_root="{tmp_path}"'])
-    warn = [w for w in cfg['warnings'] if 'bare-core' in w]
+    on = ['solve.param="log_f_atm"', f'output_root="{tmp_path}"']
+    cfg = config.load_config(toi, on)
+    note = [n for n in cfg['notes'] if 'bare-core' in n]
+    assert len(note) == 1 and '(1-1.682 R_earth over the Mp prior)' in note[0] and '-1.5 sigma' in note[0]
+    assert 'The plateau branch (solve.plateau) samples the stripped planets' in note[0]
+    assert not [w for w in cfg['warnings'] if 'bare-core' in w]
+    # without the branch: a warning, no note
+    off = config.load_config(toi, on + ['solve.plateau=false'])
+    warn = [w for w in off['warnings'] if 'bare-core' in w]
     assert len(warn) == 1 and '(1-1.682 R_earth over the Mp prior)' in warn[0] and '-1.5 sigma' in warn[0]
-    assert not [w for w in config.load_config(toi, [f'output_root="{tmp_path}"'])['warnings'] if 'bare-core' in w]
-    assert not [w for w in config.load_config(EXAMPLE)['warnings'] if 'bare-core' in w] # solved on the outflow
+    assert 'With solve.plateau = false solve mode leaves out the posterior mass of stripped planets' in warn[0]
+    assert not [n for n in off['notes'] if 'bare-core' in n]
+    # neither without solve mode, nor for LHS 1140 b (solved on the outflow)
+    for other in (config.load_config(toi, [f'output_root="{tmp_path}"']), config.load_config(EXAMPLE)):
+        assert not [text for text in other['warnings'] + other['notes'] if 'bare-core' in text]
     # solve.plateau on a synthetic search: equal T at three log_f_atm (the plateau), then the rising branch
     st = solve.settings(cfg)
     flat = {'status': model.OK, 'terms': {'Rp': -1.07}}
@@ -838,13 +849,18 @@ def test_bare_core_plateau(tmp_path, capsys):
     assert solve.plateau(hist[1:3] + hist[4:], st, 1.55) is None # one evaluation on it: not seen as a plateau
     assert solve.plateau(hist, dict(st, bounds = (1.5, 1.9)), 1.55) is None # outside the u support
     # check on the toy (Rp datum 1.6 +- 0.06, so the bare core 1.538 at Mp = 5.6 lies inside the u support; at
-    # 10 Gyr the toy is stripped below log_f_atm -4.83, where its radius jumps from 1.618 to the bare core)
+    # 10 Gyr the toy is stripped below log_f_atm -4.83, where its radius jumps from 1.618 to the bare core). u = 1.6
+    # lies in that jump, above the bare core: no root, and no plateau branch, whose u lie below the bare core
     path = toy_file(tmp_path, 'plateau')
     assert main(['check', path, '--theta', 'age=1e10', '--set', 'observables.Rp.value=1.6', '--set',
                  'observables.Rp.sigma=0.06']) == 1 # no root: the jump
     out = capsys.readouterr().out
     assert 'note: a plateau: Rp gives T = 1.53832 at every log_f_atm evaluated from -5 to -4.8' in out
-    assert 'bare-core radius (1.456-1.609 R_earth over the Mp prior)' in out # the config warning
+    assert 'the plateau branch (solve.plateau) samples that stretch of log_f_atm' in out
+    assert 'plateau branch:' not in out
+    # the config's note, printed after the warnings, and not a warning
+    assert ('\n  note: solve mode on Rp along log_f_atm: a planet that loses its atmosphere has Rp = the bare-core '
+            'radius (1.456-1.609 R_earth over the Mp prior)') in out and '  - solve mode on Rp along' not in out
 
 
 def test_check_solve_cli(tmp_path, capsys):
@@ -963,7 +979,8 @@ def test_scan_reports_monotonicity(tmp_path, capsys):
     assert stretches == [(p[1], p[2]), (p[7], p[8])]
     # plateaus: the bare core inside the u range is reported, x = 1 outside it is not
     line = np.array([1.46, 1.46, 1.46, 1.5, 1.6, 1.7, 1.8, 2.0, 2.0, 2.0, 2.0])
-    assert scan._plateau_lines(p, line, 1.2, 1.9, 1e-9) == [(p[0], p[2], 1.46)]
+    assert scan._plateau_lines(p, line, 1.2, 1.9, 1e-9) == [(p[0], p[2], 1.46, False)]
+    assert scan._plateau_lines(p, line, 1.2, 1.9, 1e-9, np.arange(len(p)) < 3) == [(p[0], p[2], 1.46, True)]
     assert scan._plateau_lines(p, np.array([np.nan]*3 + list(line[3:])), 1.2, 1.9, 1e-9) == []
     # at 10 Gyr the toy is stripped below log_f_atm -4.83 (Rp = the bare core 1.538, inside [1.24, 1.96])
     assert main(['scan', path, '--x', 'log_f_atm=-5:-4:11', '--theta', 'age=1e10', '--workers', '1', '--set',
@@ -971,6 +988,248 @@ def test_scan_reports_monotonicity(tmp_path, capsys):
     out = capsys.readouterr().out
     assert 'but Rp is constant (a plateau) over part of log_f_atm on 1 of 1 line(s)' in out
     assert 'plateau: Rp = 1.53832 for log_f_atm -5 to -4.9' in out
+
+
+###_____The plateau branch_____###
+
+def test_plateau_map():
+    '''
+    Checks solve.plateau_map on hand-made inputs (u support [1.2, 2.0], log_f_atm from -5 to -1.3). With the lower
+    bound stripped (T_s = 1.5) and T rising to T_o = 1.75 at the upper one, the u without a root are those below T_s,
+    then those above T_o: one stretch of length L = 0.55, mapped linearly from lo (next to T_s) to hi, with the
+    constant |dP/du| = 3.7/L across both parts; the u between T_s and T_o (roots) get nothing. With T_o beyond the
+    support only the u below T_s are left. With the upper bound stripped and T falling away from it, the stretches
+    lie above T_s and below T_o. Both bounds stripped with the same T: the u below and above the plateau map onto
+    the whole prior. The margins keep the u that converge at a bound out. No point for a plateau outside the u
+    support, for both bounds stripped with different T, without a stripped bound, or without a finite T.
+    '''
+    support, lo, hi, T_s = (1.2, 2.0), -5.0, -1.3, 1.5 # u [T units], P [dex]
+
+    def rising(u, T_o = 1.75, T_s = T_s, margins = (0.0, 0.0)): # the lower bound stripped, T rising from it
+        return solve.plateau_map(u, support, lo, hi, T_s, T_o, True, False, margins)
+    L = (T_s - 1.2) + (2.0 - 1.75)
+    for u, d in ((1.4, 0.1), (1.2, 0.3), (1.8, 0.3 + 0.05), (2.0, L)):
+        P_m, jac, plateau, stretches = rising(u)
+        assert P_m == pytest.approx(lo + d/L*(hi - lo)) and jac == pytest.approx((hi - lo)/L) and plateau == T_s
+        assert stretches == ((T_s, 1.2), (1.75, 2.0))
+    du = 1e-6 # the slope of the map is jac on both parts, falling below T_s and rising above T_o
+    for u, sign in ((1.4, -1), (1.9, 1)):
+        slope = (rising(u + du)[0] - rising(u - du)[0])/(2*du)
+        assert sign*slope == pytest.approx(3.7/L, rel = 1e-6)
+    assert rising(T_s - 1e-12)[0] == pytest.approx(lo) and rising(1.2)[0] == pytest.approx(rising(1.75 + 1e-12)[0])
+    assert all(rising(u) is None for u in (T_s, 1.6, 1.75)) # between T_s and T_o: roots
+    # T_o beyond the support: only the u below T_s
+    P_m, jac, _, stretches = rising(1.4, T_o = 2.5)
+    assert P_m == pytest.approx(lo + 0.1/0.3*(hi - lo)) and jac == pytest.approx(3.7/0.3) and stretches[1] == (2.0, 2.0)
+    # the margins: a u within them of T_s or T_o converges at that bound in the search
+    margins = (0.01, 0.02) # for a u below and above a bound's T
+    assert rising(1.495, margins = margins) is None and rising(1.765, margins = margins) is None
+    P_m, jac, _, stretches = rising(1.4, margins = margins)
+    assert stretches == ((1.49, 1.2), (1.77, 2.0)) and P_m == pytest.approx(lo + 0.09/(0.29 + 0.23)*(hi - lo))
+    # the upper bound stripped, T falling away from it to T_o = 1.3: the u above T_s, then those below T_o
+    falling = lambda u: solve.plateau_map(u, support, lo, hi, 1.3, T_s, False, True)
+    P_m, jac, _, stretches = falling(1.75)
+    assert P_m == pytest.approx(hi + 0.25/0.6*(lo - hi)) and jac == pytest.approx(3.7/0.6)
+    assert stretches == ((T_s, 2.0), (1.3, 1.2)) and falling(1.2)[0] == pytest.approx(lo)
+    assert falling(1.4) is None
+    # both bounds stripped, the same T: below the plateau first, then above it, onto the whole prior
+    both = lambda u: solve.plateau_map(u, support, lo, hi, T_s, T_s, True, True)
+    assert both(1.4)[0] == pytest.approx(lo + 0.1/0.8*(hi - lo))
+    assert both(1.6)[0] == pytest.approx(lo + 0.4/0.8*(hi - lo))
+    assert both(2.0)[0] == pytest.approx(hi) and both(1.4)[1] == pytest.approx(3.7/0.8)
+    # no point
+    assert rising(1.4, T_s = 1.1) is None and rising(1.9, T_s = 2.2, T_o = 2.5) is None # the plateau outside
+    assert solve.plateau_map(1.4, support, lo, hi, T_s, 1.6, True, True) is None # stripped at both, T differs
+    assert solve.plateau_map(1.4, support, lo, hi, T_s, 1.75, False, False) is None
+    for T_lo, T_hi in ((math.nan, 1.75), (T_s, math.nan), (T_s, math.inf), (T_s, T_s)):
+        assert solve.plateau_map(1.4, support, lo, hi, T_lo, T_hi, True, False) is None, (T_lo, T_hi)
+        assert solve.plateau_map(1.75, support, lo, hi, T_hi, T_lo, False, True) is None, (T_lo, T_hi)
+
+
+def test_plateau_branch(tmp_path, capsys):
+    '''
+    Checks the plateau branch on the toy with the Rp datum 1.6 +- 0.06, at Mp = 5.6 and 10 Gyr: stripped below
+    log_f_atm -4.83 (Rp = the bare core T_s = 1.538), above that the radius jumps to 1.618. A u below T_s has no
+    root, and plateau_map gives it a log_f_atm: a stripped planet there counts (status 0, with the Jacobian of the
+    map), one that keeps its atmosphere has a root of its own and is status 1 here. A u in the jump is status 1,
+    without the branch. solve.plateau = false and a config saved before the option leave the branch out, the
+    warm-start table leaves its points out (but keeps every root), and check prints it.
+    '''
+    data = ['observables.Rp.value=1.6', 'observables.Rp.sigma=0.06']
+    cfg = toy_cfg(tmp_path, *data)
+    st = solve.settings(cfg)
+    assert st['plateau'] and cfg['solve']['plateau']
+    lo, hi, (u_lo, u_hi) = st['lo'], st['hi'], st['bounds']
+    Mp, age = 5.6, 1e10
+    bare = model.evaluate([lo, Mp, age], cfg) # stripped at the lower bound: Rp = the bare core
+    T_s, T_o = bare['obs']['Rp'], model.evaluate([hi, Mp, age], cfg)['obs']['Rp']
+    assert bare['obs']['exhausted'] == 1 and T_s == pytest.approx(Mp**0.25, rel = 1e-12) and u_lo < T_s < u_hi
+    margin = st['tol']*likelihood.sigma_eff(st['ocfg']) # a u this close to T_s converges at lo instead
+    L = (T_s - margin - u_lo) + max(u_hi - (T_o + margin), 0.0) # below the bare core, then above T_o
+    # just below the bare core: the stripped planet at lo + d/L (hi - lo), d = T_s - margin - u
+    u = T_s - 0.01
+    res = solve.evaluate([u, Mp, age], cfg, history = True)
+    P = lo + (T_s - margin - u)/L*(hi - lo)
+    assert res['status'] == model.OK and res['obs']['exhausted'] == 1 and res['error'] is None
+    assert res['solve_value'] == pytest.approx(P, rel = 1e-12) and P < -4.83 # stripped there
+    assert res['log_jac'] == pytest.approx(math.log((hi - lo)/L), rel = 1e-12)
+    assert res['lp'] == pytest.approx(res['log_prior'] + res['log_jac'] + res['log_like'], rel = 1e-12)
+    assert res['plateau']['P'] == res['solve_value'] and res['plateau']['T'] == T_s
+    assert res['plateau']['jac'] == pytest.approx(math.exp(res['log_jac']), rel = 1e-12)
+    # the search's two bounds, then the branch's run; the blobs belong to the physical point (P, phi)
+    assert res['solve_evals'] == 3 and [h[0] for h in res['history']] == ['ends', 'ends', 'plateau']
+    direct = model.evaluate(solve.physical([u, Mp, age], res['solve_value'], cfg), cfg)
+    assert direct['obs']['Rp'] == res['obs']['Rp'] == T_s and direct['log_like'] == res['log_like']
+    # within the margin of the bare core the search converges at lo, where dT/dlog_f_atm = 0: no point
+    near = solve.evaluate([T_s - 0.5*margin, Mp, age], cfg)
+    assert near['status'] == model.NO_LIKELIHOOD and 'plateau' not in near
+    # far below the bare core the map gives a log_f_atm that keeps its atmosphere: status 1 here, since that
+    # log_f_atm has a root of its own, at the u of its radius
+    far = solve.evaluate([1.3, Mp, age], cfg)
+    assert far['status'] == model.OUTSIDE_PRIOR and far['lp'] == -math.inf and math.isnan(far['solve_value'])
+    assert 'keeps its atmosphere' in far['error'] and far['solve_evals'] == 3
+    P_far = far['plateau']['P']
+    alive = model.evaluate([P_far, Mp, age], cfg)
+    assert alive['obs']['exhausted'] == 0 and P_far > -4.82
+    root = solve.evaluate([alive['obs']['Rp'], Mp, age], cfg)
+    assert root['status'] == model.OK and 'plateau' not in root
+    assert root['solve_value'] == pytest.approx(P_far, abs = 0.02)
+    # u in the jump, between the bare core and 1.618: no root, and no point of the branch either
+    gap = solve.evaluate([1.58, Mp, age], cfg)
+    assert gap['status'] == model.OUTSIDE_PRIOR and 'jump across the target' in gap['error'] and 'plateau' not in gap
+    # without the branch, and for a config saved before the option (no solve.plateau, so false): no point
+    off = toy_cfg(tmp_path, *data, 'solve.plateau=false')
+    old = copy.deepcopy(cfg)
+    del old['solve']['plateau']
+    for c in (off, old):
+        assert solve.settings(c)['plateau'] is False
+        r = solve.evaluate([u, Mp, age], c)
+        assert r['status'] == model.OUTSIDE_PRIOR and 'g > 0 at both ends' in r['error'] and 'plateau' not in r
+        assert r['solve_evals'] == 2 and r['lp'] == -math.inf
+    # the warm-start table learns from roots only: NaN for the branch's point, and for no solve; the root at the
+    # bare core within the margin (status 3) keeps its value, as before the option existed
+    results = [res, root, far, near]
+    blobs = np.array([model.blob(r) for r in results], dtype = model.blob_dtype())
+    thetas = np.array([[u, Mp, age], [alive['obs']['Rp'], Mp, age], [1.3, Mp, age], [T_s - 0.5*margin, Mp, age]])
+    values = solve.table_values(cfg, thetas, blobs)
+    assert np.isnan(values[0]) and values[1] == root['solve_value'] and np.isnan(values[2]) and values[3] == lo
+    assert blobs['solve_value'][0] == res['solve_value'] # the blob keeps the branch's log_f_atm
+    # check at a u below the bare core: the branch's point counts (exit code 0), and one far below does not
+    path = toy_file(tmp_path, 'plateau')
+    sets = [arg for item in data for arg in ('--set', item)]
+    u_check = 1.528
+    capsys.readouterr()
+    assert main(['check', path, '--theta', 'age=1e10', '--theta', f'u_Rp={u_check}'] + sets) == 0
+    out = capsys.readouterr().out
+    P_check = lo + (T_s - margin - u_check)/L*(hi - lo)
+    assert 'plateau branch: no root; the u without a root' in out and 'stripped, on the plateau, so it counts' in out
+    assert f'the plateau at T = {T_s:.6g}: log_f_atm = {P_check:.6g}' in out
+    assert "(the plateau branch's map)" in out
+    assert main(['check', path, '--theta', 'age=1e10', '--theta', 'u_Rp=1.3'] + sets) == 1
+    out = capsys.readouterr().out
+    assert 'not on the plateau, so it has a root of its own and counts there' in out and 'no solve: status 1' in out
+
+
+def test_plateau_needs_a_flat_plateau(tmp_path):
+    '''
+    Checks that the plateau branch counts only points on a true plateau. Solved for Mp on Rp, a stripped planet has
+    the bare-core radius (Mp/M_earth)^(1/4) R_earth, which changes with Mp: every stripped Mp has a root of its own,
+    so the branch's point, stripped but with another T, must not count again (status 1). The root on a stripped
+    planet does count, and the warm-start table keeps it. A plateau whose T lies outside the u support (an upper
+    limit on Rp below the bare core) gets no point either, as any model value there.
+    '''
+    cfg = toy_cfg(tmp_path, 'observables.Rp.value=1.6', 'observables.Rp.sigma=0.06', 'solve.param="Mp"')
+    assert solve.settings(cfg)['plateau'] and cfg['sampled'][1] == 'u_Rp'
+    lf, age = -4.7, 1e10 # stripped below Mp of about 5.4
+    branch = solve.evaluate([lf, 1.41, age], cfg) # below the bare core of the smallest Mp: no root
+    assert branch['status'] == model.OUTSIDE_PRIOR and 'is stripped but not on the plateau' in branch['error']
+    root = solve.evaluate([lf, 5.0**0.25, age], cfg) # the bare core of Mp = 5: a root, stripped
+    assert root['status'] == model.OK and root['obs']['exhausted'] == 1
+    assert root['solve_value'] == pytest.approx(5.0, abs = 1e-3) and 'plateau' not in root
+    blobs = np.array([model.blob(root)], dtype = model.blob_dtype())
+    assert solve.table_values(cfg, np.array([[lf, 5.0**0.25, age]]), blobs)[0] == root['solve_value']
+    # an upper limit of 1.5 on Rp: u in [1.2, 1.5] below the bare core 1.538 (Mp 5.6), which lies outside it
+    limit = toy_cfg(tmp_path, 'observables.Rp.value=1.5', 'observables.Rp.sigma=0.05', 'observables.Rp.kind="upper"')
+    r = solve.evaluate([1.45, 5.6, age], limit)
+    assert r['status'] == model.OUTSIDE_PRIOR and 'plateau' not in r
+
+
+def plateau_cfg(root, *overrides, Mp = None):
+    '''
+    A toy where about 44% of the posterior over (log_f_atm, Mp) are stripped planets: at 10 Gyr a planet of 3-5
+    M_earth loses its atmosphere below log_f_atm of about -0.5 (Mp 3.2) to -4 (Mp 4.75), and the bare core and the
+    planets just keeping an atmosphere both fit Rp = 1.48 +- 0.05. Uncoupled at 1e4 steps, where the toy's radius
+    jumps by 10% at the stripping edge; Mp fixed at Mp when given
+
+    Inputs:
+        - root: output_root of the runs [Path]
+        - overrides: more --set overrides [str]
+        - Mp: fixed planet mass; None: free in [3, 5] [M_earth]
+
+    Output: the resolved config [dict]
+    '''
+    raw = {'name': 'plateau', 'output_root': str(root), 'star': {'mass': 0.18, 'luminosity': 0.0038},
+           'planet': {'period': 24.74},
+           'model': {'backend': 'toy', 'n_steps': 10000, 'n_atmodeller': 0, 'step_fn': True},
+           'params': {'log_f_atm': {'vary': True, 'bounds': [-4.0, -0.5]},
+                      'Mp': {'vary': True, 'bounds': [3.0, 5.0]} if Mp is None else Mp,
+                      'age': 1e10, 'F_final': 0.17, 't_sat': 3.128e9},
+           'observables': {'Rp': {'use': True, 'value': 1.48, 'sigma': 0.05}},
+           'parallel': {'workers': 2, 'cache': False, 'warmup': False},
+           'sampler': {'nwalkers': 16, 'check_every': 100, 'tracks': 0, 'print_every': 100, 'checkpoint_every': 100}}
+    return config.load_config(raw, list(overrides))
+
+
+def test_plateau_density(tmp_path):
+    '''
+    The key test of the plateau branch: the solve-mode density, integrated over u, gives the stripped planets the
+    posterior mass they have over log_f_atm, by brute force with no Jacobian involved. At Mp = 4.2, 66% of the
+    posterior there is stripped (log_f_atm below -3.14), and solve mode samples it through the u below the bare core,
+    1.43 R_earth, across the toy's jump of 10% at the stripping edge. The quadrature is exact to 0.5%, far below a
+    chain's Monte Carlo error; without the branch the mass is 0. (A chain, test_plateau_chain, needs a long run to
+    get the split right here, since its walkers cross the jump only now and then.)
+    '''
+    phys = plateau_cfg(tmp_path, Mp = 4.2)
+    # a u in the jump runs its search up to max_evals for nothing: 12 is enough for the 3 runs of a stripped point
+    solved = plateau_cfg(tmp_path, 'solve.param="log_f_atm"', 'solve.max_evals=12', Mp = 4.2)
+    n_P, n_u = 2000, 1500
+    P = -4.0 + (np.arange(n_P) + 0.5)*3.5/n_P # cell midpoints
+    runs = [model.evaluate([x], phys) for x in P]
+    w = np.exp([r['lp'] for r in runs])*3.5/n_P
+    stripped = np.array([r['obs']['exhausted'] == 1 for r in runs])
+    assert 0.6 < w[stripped].sum()/w.sum() < 0.7
+    u_lo, u_hi = solved['solve']['bounds']
+    u = u_lo + (np.arange(n_u) + 0.5)*(u_hi - u_lo)/n_u
+    solves = [solve.evaluate([x], solved) for x in u]
+    ok = np.array([r['status'] == model.OK and r['obs']['exhausted'] == 1 for r in solves])
+    mass = np.sum(np.exp([r['lp'] for r in solves])*ok)*(u_hi - u_lo)/n_u
+    assert mass == pytest.approx(w[stripped].sum(), rel = 5e-3)
+    assert u[ok].max() < 4.2**0.25 # just below the bare core, the toy's (Mp/M_earth)^(1/4) R_earth
+    off = plateau_cfg(tmp_path, 'solve.param="log_f_atm"', 'solve.plateau=false', 'solve.max_evals=12', Mp = 4.2)
+    assert not any(solve.evaluate([x], off)['status'] == model.OK for x in u[ok][::50])
+
+
+def test_plateau_chain(tmp_path):
+    '''
+    Checks a short solve-mode run with the plateau branch at Mp = 4.2 (plateau_cfg): the walkers start and move
+    among both the stripped planets and those that keep an atmosphere, each stripped sample a status-0 point below
+    the stripping edge, and the summary counts their crossings. The split itself takes a long run, since the walkers
+    cross the toy's jump only now and then (the summary warns), so its accuracy is left to test_plateau_density.
+    Without the branch the stripped samples have no density: on this toy such a run could not even start, as few
+    u of the data's distribution have a root.
+    '''
+    cfg = plateau_cfg(tmp_path, 'solve.param="log_f_atm"', 'sampler.max_steps=200', Mp = 4.2)
+    run = sampler.load_run(sampler.run_mcmc(cfg, workers = 2, make_plots = False))
+    samples, blobs = sampler.posterior(run)
+    stripped = blobs['exhausted'] == 1
+    assert 0.1 < stripped.mean() < 0.95 and np.all(blobs['status'] == model.OK)
+    assert np.all(blobs['solve_value'][stripped] < -3.1) and np.all(blobs['solve_value'][~stripped] > -3.2)
+    assert np.all(samples[stripped, 0] < 4.2**0.25) # their u, below the bare core
+    branches = run['summary']['solve']['branches']
+    assert 0 < branches['stripped_fraction'] < 1 and run['summary']['solve']['plateau'] is True
+    # without the branch those samples have no density: no root of log_f_atm gives their u
+    off = plateau_cfg(tmp_path, 'solve.param="log_f_atm"', 'solve.plateau=false', Mp = 4.2)
+    assert all(solve.evaluate(theta, off)['status'] == model.OUTSIDE_PRIOR for theta in samples[stripped][:5])
 
 
 ###_____Real isocalc (slow)_____###
